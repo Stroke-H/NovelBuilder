@@ -163,7 +163,7 @@ const loadPanelPosition = () => {
     }
     const parsed = JSON.parse(raw) as Partial<PanelPosition>
     if (!Number.isFinite(parsed.x) || !Number.isFinite(parsed.y)) return
-    panelPosition.x = clamp(parsed.x!, 12, Math.max(window.innerWidth - 280, 12))
+    panelPosition.x = clamp(parsed.x!, 12, Math.max(window.innerWidth - 390, 12))
     panelPosition.y = clamp(parsed.y!, 12, Math.max(window.innerHeight - 72, 12))
   } catch (error) {
     console.warn('Failed to load insight panel position', error)
@@ -185,7 +185,7 @@ const handleDragMove = (event: PointerEvent) => {
   const deltaX = event.clientX - dragState.startX
   const deltaY = event.clientY - dragState.startY
   if (Math.abs(deltaX) + Math.abs(deltaY) > 4) dragState.moved = true
-  panelPosition.x = clamp(dragState.originX + deltaX, 12, Math.max(window.innerWidth - 280, 12))
+  panelPosition.x = clamp(dragState.originX + deltaX, 12, Math.max(window.innerWidth - 390, 12))
   panelPosition.y = clamp(dragState.originY + deltaY, 12, Math.max(window.innerHeight - 72, 12))
 }
 
@@ -231,7 +231,7 @@ onMounted(loadPanelPosition)
 .insight-container {
   position: fixed;
   z-index: 100;
-  width: 260px;
+  width: min(390px, calc(100vw - 48px));
   transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -243,7 +243,9 @@ onMounted(loadPanelPosition)
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 14px;
   width: 100%;
+  box-sizing: border-box;
   padding: 10px 18px;
   background: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(20px);
@@ -272,7 +274,9 @@ onMounted(loadPanelPosition)
 .toggle-content {
   display: flex;
   align-items: center;
+  flex: 1 1 auto;
   gap: 10px;
+  min-width: 0;
   color: #0f766e;
 }
 
@@ -281,21 +285,27 @@ onMounted(loadPanelPosition)
 }
 
 .toggle-text {
+  overflow: hidden;
   font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .toggle-status {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
   gap: 6px;
   color: #64748b;
+  white-space: nowrap;
 }
 
 .material-import-btn {
   display: inline-flex;
   align-items: center;
+  flex: 0 0 auto;
   height: 26px;
   padding: 0 10px;
   border: 1px solid rgba(13, 148, 136, 0.2);
@@ -317,6 +327,7 @@ onMounted(loadPanelPosition)
 .status-label {
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .arrow-icon {
