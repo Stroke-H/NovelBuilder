@@ -53,6 +53,8 @@ defineProps<{
 
 <style scoped>
 .audit-panel {
+  box-sizing: border-box;
+  min-width: 0;
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 24px;
@@ -93,7 +95,7 @@ defineProps<{
 
 .score-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-bottom: 16px;
 }
@@ -112,6 +114,8 @@ defineProps<{
 .score-card span {
   color: #64748b;
   font-size: 12px;
+  line-height: 1.35;
+  word-break: keep-all;
 }
 
 .score-card strong {
@@ -156,16 +160,21 @@ defineProps<{
 
 .issue-card strong {
   color: #0f172a;
+  word-break: break-word;
 }
 
 .issue-card p {
   margin: 8px 0;
   color: #475569;
+  line-height: 1.65;
+  word-break: break-word;
 }
 
 .issue-card em {
   color: #0f766e;
   font-style: normal;
+  line-height: 1.65;
+  word-break: break-word;
 }
 
 .advice-box {

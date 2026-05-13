@@ -620,22 +620,23 @@ onBeforeUnmount(stopOutlinePolling)
   flex-direction: column;
   gap: 24px;
   padding: 24px 32px;
-  max-width: 1600px;
-  margin: 0 auto;
+  box-sizing: border-box;
   width: 100%;
 }
 
 .generation-review-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
   gap: 24px;
   align-items: start;
+  min-width: 0;
 }
 
 .generation-audit-column {
   position: sticky;
   top: 24px;
   min-width: 0;
+  width: 100%;
 }
 
 .workspace-switch {

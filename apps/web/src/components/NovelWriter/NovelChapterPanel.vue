@@ -180,6 +180,8 @@ const selectOutline = (outlineId: string) => {
 
 <style scoped>
 .chapter-panel {
+  box-sizing: border-box;
+  min-width: 0;
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 24px;
@@ -188,6 +190,7 @@ const selectOutline = (outlineId: string) => {
 
 .panel-head {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
   margin-bottom: 18px;
@@ -229,9 +232,10 @@ const selectOutline = (outlineId: string) => {
 
 .chapter-layout {
   display: grid;
-  grid-template-columns: 330px 1fr;
+  grid-template-columns: minmax(260px, 330px) minmax(0, 1fr);
   gap: 18px;
   align-items: stretch;
+  min-width: 0;
 }
 
 .chapter-tabs {
@@ -361,10 +365,15 @@ const selectOutline = (outlineId: string) => {
 
 .chapter-preview__top {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
   padding-bottom: 14px;
   border-bottom: 1px solid #e2e8f0;
+}
+
+.chapter-preview__top > div:first-child {
+  min-width: 0;
 }
 
 .chapter-preview__top h4 {
@@ -381,6 +390,7 @@ const selectOutline = (outlineId: string) => {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
+  flex: 0 1 360px;
   gap: 8px;
 }
 
@@ -407,7 +417,10 @@ const selectOutline = (outlineId: string) => {
 }
 
 .chapter-content {
+  box-sizing: border-box;
+  width: 100%;
   max-height: 660px;
+  margin: 0;
   overflow: auto;
   padding: 20px;
   border-radius: 18px;

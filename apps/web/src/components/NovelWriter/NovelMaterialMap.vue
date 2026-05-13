@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, shallowRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Connection, EditPen, Minus, Plus, UserFilled } from '@element-plus/icons-vue'
+import { Connection, DocumentChecked, EditPen, MagicStick, Memo, Minus, Plus, UserFilled } from '@element-plus/icons-vue'
 import type { NovelMaterials } from '@/api/novelWriter'
 
 const props = defineProps<{
@@ -50,6 +50,12 @@ interface CharacterFormState {
   weakness: string
 }
 
+interface CanvasViewport {
+  x: number
+  y: number
+  zoom: number
+}
+
 const form = reactive<NovelMaterials>({ ...props.modelValue })
 const canvasRef = shallowRef<HTMLElement | null>(null)
 const zoomLevel = shallowRef(0.92)
@@ -85,9 +91,11 @@ const nodeDragState = reactive({
 })
 
 let panFrame = 0
+let viewportPersistFrame = 0
 let pendingPan: PointerEvent | null = null
 const defaultCharacterTemplate = '名称：\n性格：\n身份：\n欲望：\n弱点：'
 const positionStorageNamespace = 'novel-generater:material-map-positions'
+const viewportStorageNamespace = 'novel-generater:material-map-viewport'
 
 const characterRoleOptions: CharacterRoleOption[] = [
   { label: '男主角', value: '男主角', template: defaultCharacterTemplate },
@@ -186,12 +194,20 @@ const hashString = (value: string) => {
   return Math.abs(hash).toString(36)
 }
 
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
+
 const nodePositionKey = (node: CanvasNode) => `${node.type}:${node.id}`
 
 const positionStorageKey = computed(() => {
   const projectKey = String(props.positionStorageKey || '').trim()
   if (projectKey) return `${positionStorageNamespace}:${projectKey}`
   return `${positionStorageNamespace}:draft:${hashString(JSON.stringify(props.modelValue))}`
+})
+
+const viewportStorageKey = computed(() => {
+  const projectKey = String(props.positionStorageKey || '').trim()
+  if (projectKey) return `${viewportStorageNamespace}:${projectKey}`
+  return `${viewportStorageNamespace}:draft:${hashString(JSON.stringify(props.modelValue))}`
 })
 
 const getNodePosition = (node: CanvasNode) => nodePositionOverrides[nodePositionKey(node)] || { x: node.x, y: node.y }
@@ -219,6 +235,44 @@ const persistNodePositions = () => {
   } catch (error) {
     console.warn('Failed to persist material map positions', error)
   }
+}
+
+const loadViewport = () => {
+  if (typeof window === 'undefined') return
+  try {
+    const raw = window.localStorage.getItem(viewportStorageKey.value)
+    if (!raw) return
+    const parsed = JSON.parse(raw) as Partial<CanvasViewport>
+    if (!Number.isFinite(parsed.x) || !Number.isFinite(parsed.y) || !Number.isFinite(parsed.zoom)) return
+    translateX.value = parsed.x!
+    translateY.value = parsed.y!
+    zoomLevel.value = clamp(parsed.zoom!, 0.45, 1.8)
+  } catch (error) {
+    console.warn('Failed to load material map viewport', error)
+  }
+}
+
+const persistViewport = () => {
+  if (typeof window === 'undefined') return
+  try {
+    const viewport: CanvasViewport = {
+      x: translateX.value,
+      y: translateY.value,
+      zoom: zoomLevel.value
+    }
+    window.localStorage.setItem(viewportStorageKey.value, JSON.stringify(viewport))
+  } catch (error) {
+    console.warn('Failed to persist material map viewport', error)
+  }
+}
+
+const schedulePersistViewport = () => {
+  if (typeof window === 'undefined') return
+  if (viewportPersistFrame) window.cancelAnimationFrame(viewportPersistFrame)
+  viewportPersistFrame = window.requestAnimationFrame(() => {
+    viewportPersistFrame = 0
+    persistViewport()
+  })
 }
 
 const isCharacterEditing = (nodeId: string) => Boolean(characterEditingMap[nodeId])
@@ -338,11 +392,12 @@ watch(
 
 watch(
   positionStorageKey,
-  () => loadNodePositions(),
+  () => {
+    loadNodePositions()
+    loadViewport()
+  },
   { immediate: true }
 )
-
-const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
 
 const zoomAtPoint = (nextZoom: number, clientX?: number, clientY?: number) => {
   const canvas = canvasRef.value
@@ -359,12 +414,14 @@ const zoomAtPoint = (nextZoom: number, clientX?: number, clientY?: number) => {
   zoomLevel.value = zoom
   translateX.value = focusX - rect.left - contentX * zoom
   translateY.value = focusY - rect.top - contentY * zoom
+  schedulePersistViewport()
 }
 
 const centerCanvas = () => {
   translateX.value = 80
   translateY.value = 42
   zoomLevel.value = 0.92
+  schedulePersistViewport()
 }
 
 const handleWheel = (event: WheelEvent) => {
@@ -376,6 +433,7 @@ const handleWheel = (event: WheelEvent) => {
   }
   translateX.value -= event.deltaX
   translateY.value -= event.deltaY
+  schedulePersistViewport()
 }
 
 const isPanTarget = (target: HTMLElement) => {
@@ -433,6 +491,7 @@ const handlePointerMove = (event: PointerEvent) => {
       touchGesture.centerY = centerY
       touchGesture.tx = translateX.value
       touchGesture.ty = translateY.value
+      schedulePersistViewport()
       return
     }
   }
@@ -444,6 +503,7 @@ const handlePointerMove = (event: PointerEvent) => {
     if (!pendingPan) return
     translateX.value = startPos.tx + pendingPan.clientX - startPos.x
     translateY.value = startPos.ty + pendingPan.clientY - startPos.y
+    schedulePersistViewport()
     panFrame = 0
     pendingPan = null
   })
@@ -674,7 +734,7 @@ const formatCharacterDisplayRows = (value: string) => {
 }
 
 onMounted(() => {
-  nextTick(centerCanvas)
+  nextTick(loadViewport)
 })
 </script>
 
@@ -685,12 +745,6 @@ onMounted(() => {
       <div class="material-map-page__switch">
         <slot name="workspace-switch" />
       </div>
-    </div>
-
-    <div class="material-map-page__actions">
-      <el-button :loading="saving" @click="emit('save')">保存素材</el-button>
-      <el-button type="primary" @click="emit('extract')">信息提取</el-button>
-      <el-button @click="emit('next')">生成大纲</el-button>
     </div>
 
     <div
@@ -704,6 +758,21 @@ onMounted(() => {
       @pointerleave="handlePointerUp"
       @drop.prevent="handleMainDrop"
     >
+      <div class="material-map-page__actions">
+        <button class="canvas-createbar__button canvas-createbar__button--save" type="button" :disabled="saving" @click="emit('save')">
+          <el-icon><DocumentChecked /></el-icon>
+          <span>{{ saving ? '保存中' : '保存素材' }}</span>
+        </button>
+        <button class="canvas-createbar__button canvas-createbar__button--extract" type="button" @click="emit('extract')">
+          <el-icon><MagicStick /></el-icon>
+          <span>信息提取</span>
+        </button>
+        <button class="canvas-createbar__button canvas-createbar__button--outline" type="button" @click="emit('next')">
+          <el-icon><Memo /></el-icon>
+          <span>生成大纲</span>
+        </button>
+      </div>
+
       <div class="canvas-createbar">
         <el-dropdown trigger="click" @command="(role: string | number | object) => addCharacter(String(role))">
           <button class="canvas-createbar__button canvas-createbar__button--character" type="button">
@@ -914,20 +983,27 @@ onMounted(() => {
 }
 
 .material-map-page__actions {
-  position: relative;
+  position: absolute;
+  top: 16px;
+  right: 16px;
   z-index: 22;
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 10px;
-  align-self: flex-end;
-  margin: 0 18px -1px 0;
-  padding: 10px 12px;
-  border: 1px solid rgba(219, 234, 254, 0.95);
-  border-bottom-color: rgba(255, 255, 255, 0.72);
-  border-radius: 18px 18px 0 0;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 -8px 24px rgba(15, 23, 42, 0.05);
+  max-width: min(560px, calc(50% - 130px));
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.64);
+  border-radius: 20px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(239, 246, 255, 0.58)),
+    rgba(255, 255, 255, 0.72);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.82),
+    0 16px 38px rgba(15, 23, 42, 0.1);
+  backdrop-filter: blur(18px) saturate(145%);
+  -webkit-backdrop-filter: blur(18px) saturate(145%);
 }
 
 .mindmap-canvas {
@@ -958,18 +1034,19 @@ onMounted(() => {
 
 .canvas-toolbar {
   position: absolute;
-  right: 16px;
+  left: 50%;
   top: 16px;
   z-index: 20;
   display: flex;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: center;
   gap: 8px;
   padding: 10px;
   border: 1px solid rgba(148, 163, 184, 0.28);
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.92);
   box-shadow: 0 14px 36px rgba(15, 23, 42, 0.08);
+  transform: translateX(-50%);
 }
 
 .canvas-createbar {
@@ -1018,6 +1095,12 @@ onMounted(() => {
   transform: translateY(-1px);
 }
 
+.canvas-createbar__button:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .canvas-createbar__button--character:hover {
   border-color: rgba(20, 184, 166, 0.45);
   background: #f0fdfa;
@@ -1037,6 +1120,27 @@ onMounted(() => {
   background: #faf5ff;
   color: #7c3aed;
   box-shadow: 0 12px 24px rgba(124, 58, 237, 0.13);
+}
+
+.canvas-createbar__button--save:hover {
+  border-color: rgba(37, 99, 235, 0.38);
+  background: #eff6ff;
+  color: #2563eb;
+  box-shadow: 0 12px 24px rgba(37, 99, 235, 0.13);
+}
+
+.canvas-createbar__button--extract:hover {
+  border-color: rgba(20, 184, 166, 0.45);
+  background: #f0fdfa;
+  color: #0f766e;
+  box-shadow: 0 12px 24px rgba(20, 184, 166, 0.16);
+}
+
+.canvas-createbar__button--outline:hover {
+  border-color: rgba(249, 115, 22, 0.42);
+  background: #fff7ed;
+  color: #ea580c;
+  box-shadow: 0 12px 24px rgba(249, 115, 22, 0.14);
 }
 
 .conflict-dialog {
@@ -1233,14 +1337,20 @@ onMounted(() => {
   }
 
   .material-map-page__actions {
-    align-self: stretch;
+    position: absolute;
+    top: 76px;
+    left: 12px;
+    right: 12px;
+    max-width: none;
     justify-content: flex-start;
-    margin-right: 0;
   }
 
   .canvas-toolbar {
+    top: 16px;
     right: 12px;
+    left: auto;
     max-width: none;
+    transform: none;
   }
 
   .canvas-createbar {
