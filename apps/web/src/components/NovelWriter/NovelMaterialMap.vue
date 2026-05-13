@@ -133,7 +133,7 @@ const appendLine = (current: string, next: string) => {
 }
 
 const readLabeledLine = (text: string, label: string) => {
-  const matched = String(text || '').match(new RegExp(`^${label}[:：]\\s*(.+)$`, 'm'))
+  const matched = String(text || '').match(new RegExp(`^${label}[:：][ \\t]*(.*)$`, 'm'))
   return matched?.[1]?.trim() || ''
 }
 
@@ -148,7 +148,8 @@ const getCharacterName = (value: string, fallback: string) => {
   const name = readCharacterName(value)
   if (name) return name
   const firstLine = String(value || '').split('\n').map((item) => item.trim()).find(Boolean) || ''
-  return firstLine.replace(/^(?:新人物|人物|角色|男主角|女主角|主要男配角|主要女配角|次要男配角|次要女配角|重要NPC|普通NPC)\s*[:：]?/, '').trim() || fallback
+  if (/^(?:角色类型|姓名|名称|性格|身份|欲望|弱点)[:：]/.test(firstLine)) return fallback
+  return firstLine.replace(/^(?:新人物|人物|角色|男主角|女主角|主要男配角|主要女配角|次要男配角|次要女配角|重要NPC|普通NPC)[ \t]*[:：]?/, '').trim() || fallback
 }
 
 const getCharacterNodeLabel = (value: string, fallback: string) => {
