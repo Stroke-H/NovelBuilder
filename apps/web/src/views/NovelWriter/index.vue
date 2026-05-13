@@ -13,7 +13,6 @@ import {
   novelWriterApi,
   type CreateNovelProjectPayload,
   type NovelExtractedInfo,
-  type NovelInfoCard,
   type NovelMaterials,
   type NovelStyleProfile,
   type NovelProject
@@ -29,6 +28,8 @@ const running = shallowRef(false)
 const createDialogVisible = shallowRef(false)
 const activeStep = shallowRef<'materials' | 'generation'>('materials')
 const insightsOpen = shallowRef(false)
+const materialInsightsImported = shallowRef(false)
+const materialInsightsSnapshot = shallowRef<NovelExtractedInfo | null>(null)
 const materialPanelRef = shallowRef<InstanceType<typeof NovelMaterialPanel> | null>(null)
 const outlinePollingTimer = shallowRef<number | undefined>()
 
@@ -107,62 +108,40 @@ const parseMaterialCard = (raw: string, fallbackName: string) => {
   }
 }
 
-const buildMaterialExtracted = (materials: NovelMaterials): NovelExtractedInfo => ({
-  characters: splitMaterialBlocks(materials.character_raw).map((description, index) => parseMaterialCard(description, `人物 ${index + 1}`)),
-  world_rules: splitMaterialBlocks(materials.world_raw).map((description, index) => parseMaterialCard(description, `世界观 ${index + 1}`)),
-  conflicts: splitMaterialLines(materials.conflict_raw).map((description, index) => parseMaterialCard(description, `冲突 ${index + 1}`)),
-  key_events: splitMaterialLines(materials.raw_text).map((description, index) => parseMaterialCard(description, `灵感 ${index + 1}`)),
+const emptyExtractedInfo = (): NovelExtractedInfo => ({
+  characters: [],
+  world_rules: [],
+  conflicts: [],
+  key_events: [],
   open_questions: []
 })
 
-const normalizeInfoCardText = (value: string) => {
-  return String(value || '')
-    .replace(/^(?:新人物|人物|角色|世界观|冲突|灵感|事件)\s*[:：]/, '')
-    .replace(/[，,；;。.\s:：]/g, '')
-    .toLowerCase()
-}
-
-const isSimilarInfoCard = (current: NovelInfoCard, existing: NovelInfoCard) => {
-  const currentName = normalizeInfoCardText(current.name)
-  const currentDescription = normalizeInfoCardText(current.description)
-  const existingName = normalizeInfoCardText(existing.name)
-  const existingDescription = normalizeInfoCardText(existing.description)
-  const currentFull = `${currentName}${currentDescription}`
-  const existingFull = `${existingName}${existingDescription}`
-
-  if (!currentFull || !existingFull) return false
-  if (currentName && existingName && currentName === existingName) return true
-  return currentFull.includes(existingFull) || existingFull.includes(currentFull)
-}
-
-const normalizeInfoCardList = (value: unknown): NovelInfoCard[] => {
-  if (Array.isArray(value)) return value
-  return []
-}
-
-const mergeInfoCards = (source: unknown, preview: unknown) => {
-  const result: NovelInfoCard[] = []
-  ;[...normalizeInfoCardList(preview), ...normalizeInfoCardList(source)].forEach((item) => {
-    if (!String(item.name || item.description || '').trim()) return
-    if (result.some((existing) => isSimilarInfoCard(item, existing))) return
-    result.push(item)
-  })
-  return result
-}
+const buildMaterialExtracted = (materials: NovelMaterials, includeIdeas = true): NovelExtractedInfo => ({
+  characters: splitMaterialBlocks(materials.character_raw).map((description, index) => parseMaterialCard(description, `人物 ${index + 1}`)),
+  world_rules: splitMaterialBlocks(materials.world_raw).map((description, index) => parseMaterialCard(description, `世界观 ${index + 1}`)),
+  conflicts: splitMaterialLines(materials.conflict_raw).map((description, index) => parseMaterialCard(description, `冲突 ${index + 1}`)),
+  key_events: includeIdeas ? splitMaterialLines(materials.raw_text).map((description, index) => parseMaterialCard(description, `灵感 ${index + 1}`)) : [],
+  open_questions: []
+})
 
 const displayExtracted = computed<NovelExtractedInfo>(() => {
-  const extracted = selectedProject.value?.extracted
-  const materialPreview = buildMaterialExtracted(currentMaterials.value)
-  return {
-    characters: mergeInfoCards(extracted?.characters, materialPreview.characters),
-    world_rules: mergeInfoCards(extracted?.world_rules, materialPreview.world_rules),
-    conflicts: mergeInfoCards(extracted?.conflicts, materialPreview.conflicts),
-    key_events: mergeInfoCards(extracted?.key_events, materialPreview.key_events),
-    open_questions: extracted?.open_questions || []
-  }
+  if (materialInsightsImported.value && materialInsightsSnapshot.value) return materialInsightsSnapshot.value
+  return selectedProject.value?.extracted || emptyExtractedInfo()
 })
 
 const displayStyleProfile = computed<NovelStyleProfile>(() => {
+  if (materialInsightsImported.value) {
+    return {
+      summary: '',
+      narration: '',
+      sentence: '',
+      dialogue: '',
+      rhythm: '',
+      do_rules: [],
+      avoid_rules: []
+    }
+  }
+
   const profile = selectedProject.value?.style_profile
   if (
     profile?.summary
@@ -176,16 +155,13 @@ const displayStyleProfile = computed<NovelStyleProfile>(() => {
     return profile
   }
 
-  const hasReference = Boolean(currentMaterials.value.reference_raw.trim())
   return {
-    summary: hasReference
-      ? '已提供文风参考文本，生成文风画像后会提炼抽象写作规则。'
-      : '未提供文风参考，可使用模型默认生成原创文风画像。',
+    summary: '',
     narration: '',
     sentence: '',
     dialogue: '',
     rhythm: '',
-    do_rules: hasReference ? ['已提供参考文本', '后续生成将优先使用抽象文风规则'] : ['默认原创文风'],
+    do_rules: [],
     avoid_rules: []
   }
 })
@@ -218,6 +194,8 @@ const selectProject = (project: NovelProject) => {
   selectedOutlineId.value = project.outline?.chapters?.[0]?.id || ''
   selectedChapterId.value = project.chapters?.[0]?.id || ''
   activeStep.value = 'materials'
+  materialInsightsImported.value = false
+  materialInsightsSnapshot.value = null
   if (project.outline?.generation_status === 'generating') {
     startOutlinePolling(project.id)
   } else {
@@ -231,6 +209,15 @@ const backToProjectList = () => {
   selectedOutlineId.value = ''
   selectedChapterId.value = ''
   insightsOpen.value = false
+  materialInsightsImported.value = false
+  materialInsightsSnapshot.value = null
+}
+
+const importMaterialsToInsights = () => {
+  materialInsightsSnapshot.value = buildMaterialExtracted(currentMaterials.value, false)
+  materialInsightsImported.value = true
+  insightsOpen.value = true
+  ElMessage.success('素材图谱内容已带入，灵感卡片未带入')
 }
 
 const createProject = async () => {
@@ -547,7 +534,10 @@ onBeforeUnmount(stopOutlinePolling)
             :outline="selectedProject.outline"
             :style-profile="displayStyleProfile"
             :open="insightsOpen"
+            :material-imported="materialInsightsImported"
+            :position-storage-key="selectedProject.id"
             @update:open="insightsOpen = $event"
+            @import-materials="importMaterialsToInsights"
           />
 
           <div class="generation-review-grid">

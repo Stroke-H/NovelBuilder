@@ -93,7 +93,7 @@ const nodeDragState = reactive({
 let panFrame = 0
 let viewportPersistFrame = 0
 let pendingPan: PointerEvent | null = null
-const defaultCharacterTemplate = '名称：\n性格：\n身份：\n欲望：\n弱点：'
+const defaultCharacterTemplate = '姓名：\n性格：\n身份：\n欲望：\n弱点：'
 const positionStorageNamespace = 'novel-generater:material-map-positions'
 const viewportStorageNamespace = 'novel-generater:material-map-viewport'
 
@@ -137,13 +137,15 @@ const readLabeledLine = (text: string, label: string) => {
   return matched?.[1]?.trim() || ''
 }
 
+const readCharacterName = (value: string) => readLabeledLine(value, '姓名') || readLabeledLine(value, '名称')
+
 const getCharacterRole = (value: string) => {
   const role = readLabeledLine(value, '角色类型')
   return role || '人物'
 }
 
 const getCharacterName = (value: string, fallback: string) => {
-  const name = readLabeledLine(value, '名称')
+  const name = readCharacterName(value)
   if (name) return name
   const firstLine = String(value || '').split('\n').map((item) => item.trim()).find(Boolean) || ''
   return firstLine.replace(/^(?:新人物|人物|角色|男主角|女主角|主要男配角|主要女配角|次要男配角|次要女配角|重要NPC|普通NPC)\s*[:：]?/, '').trim() || fallback
@@ -168,7 +170,7 @@ const replaceOrPrependLabeledLine = (text: string, label: string, nextValue: str
 const buildCharacterValue = (state: CharacterFormState) => {
   return [
     `角色类型：${state.role || '男主角'}`,
-    `名称：${state.name}`,
+    `姓名：${state.name}`,
     `性格：${state.personality}`,
     `身份：${state.identity}`,
     `欲望：${state.desire}`,
@@ -178,7 +180,7 @@ const buildCharacterValue = (state: CharacterFormState) => {
 
 const parseCharacterForm = (value: string): CharacterFormState => ({
   role: getCharacterRole(value),
-  name: readLabeledLine(value, '名称'),
+  name: readCharacterName(value),
   personality: readLabeledLine(value, '性格'),
   identity: readLabeledLine(value, '身份'),
   desire: readLabeledLine(value, '欲望'),
@@ -725,7 +727,7 @@ const handleNodePointerUp = (event: PointerEvent) => {
 const formatCharacterDisplayRows = (value: string) => {
   const parsed = parseCharacterForm(value)
   return [
-    { label: '名称', value: parsed.name || '未填写' },
+    { label: '姓名', value: parsed.name || '未填写' },
     { label: '性格', value: parsed.personality || '未填写' },
     { label: '身份', value: parsed.identity || '未填写' },
     { label: '欲望', value: parsed.desire || '未填写' },
@@ -872,7 +874,7 @@ onMounted(() => {
               <el-input
                 class="node-interactive"
                 :model-value="parseCharacterForm(node.value).name"
-                placeholder="名称"
+                placeholder="姓名"
                 @update:model-value="updateCharacterField(node, { name: String($event) })"
               />
               <el-input

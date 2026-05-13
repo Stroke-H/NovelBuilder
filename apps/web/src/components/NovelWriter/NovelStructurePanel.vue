@@ -1,15 +1,29 @@
 <template>
-  <aside :class="['insight-container', { 'insight-container--open': open }]">
-    <button class="premium-toggle" @click="toggleOpen">
+  <aside
+    :class="['insight-container', { 'insight-container--open': open, 'insight-container--dragging': dragState.active }]"
+    :style="containerStyle"
+  >
+    <div
+      class="premium-toggle"
+      role="button"
+      tabindex="0"
+      @pointerdown="handleDragStart"
+      @click="handleToggleClick"
+      @keydown.enter.prevent="toggleOpen"
+      @keydown.space.prevent="toggleOpen"
+    >
       <div class="toggle-content">
         <el-icon class="toggle-icon"><Opportunity /></el-icon>
         <span class="toggle-text">创作灵感 / 文风画像</span>
       </div>
       <div class="toggle-status">
+        <button class="material-import-btn" type="button" @click.stop="emit('importMaterials')">
+          {{ materialImported ? '素材更新' : '素材带入' }}
+        </button>
         <span class="status-label">{{ open ? '收起' : '展开' }}</span>
         <el-icon :class="['arrow-icon', { 'arrow-icon--rotated': open }]"><ArrowRight /></el-icon>
       </div>
-    </button>
+    </div>
 
     <transition name="panel-slide">
       <div v-if="open" class="premium-panel">
@@ -76,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, reactive, watch } from 'vue'
 import { Opportunity, ArrowRight, Compass, ChatLineSquare } from '@element-plus/icons-vue'
 import type { NovelExtractedInfo, NovelOutline, NovelStyleProfile } from '@/api/novelWriter'
 
@@ -85,11 +99,47 @@ const props = defineProps<{
   outline: NovelOutline
   styleProfile: NovelStyleProfile
   open: boolean
+  materialImported: boolean
+  positionStorageKey: string
 }>()
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
+  importMaterials: []
 }>()
+
+interface PanelPosition {
+  x: number
+  y: number
+}
+
+const defaultPosition: PanelPosition = {
+  x: 32,
+  y: 82
+}
+
+const panelPosition = reactive<PanelPosition>({ ...defaultPosition })
+const dragState = reactive({
+  active: false,
+  moved: false,
+  pointerId: -1,
+  startX: 0,
+  startY: 0,
+  originX: 0,
+  originY: 0
+})
+
+const positionStorageNamespace = 'novel-generater:insight-panel-position'
+
+const positionStorageKey = computed(() => {
+  const projectKey = String(props.positionStorageKey || '').trim()
+  return projectKey ? `${positionStorageNamespace}:${projectKey}` : `${positionStorageNamespace}:draft`
+})
+
+const containerStyle = computed(() => ({
+  left: `${panelPosition.x}px`,
+  top: `${panelPosition.y}px`
+}))
 
 const factCards = computed(() => [
   ...(props.extracted.characters || []).map((item) => ({ ...item, type: '人物' })),
@@ -99,13 +149,87 @@ const factCards = computed(() => [
 ])
 
 const toggleOpen = () => emit('update:open', !props.open)
+
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max)
+
+const loadPanelPosition = () => {
+  if (typeof window === 'undefined') return
+  try {
+    const raw = window.localStorage.getItem(positionStorageKey.value)
+    if (!raw) {
+      panelPosition.x = defaultPosition.x
+      panelPosition.y = defaultPosition.y
+      return
+    }
+    const parsed = JSON.parse(raw) as Partial<PanelPosition>
+    if (!Number.isFinite(parsed.x) || !Number.isFinite(parsed.y)) return
+    panelPosition.x = clamp(parsed.x!, 12, Math.max(window.innerWidth - 280, 12))
+    panelPosition.y = clamp(parsed.y!, 12, Math.max(window.innerHeight - 72, 12))
+  } catch (error) {
+    console.warn('Failed to load insight panel position', error)
+  }
+}
+
+const persistPanelPosition = () => {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(positionStorageKey.value, JSON.stringify(panelPosition))
+  } catch (error) {
+    console.warn('Failed to persist insight panel position', error)
+  }
+}
+
+const handleDragMove = (event: PointerEvent) => {
+  if (!dragState.active || dragState.pointerId !== event.pointerId) return
+  event.preventDefault()
+  const deltaX = event.clientX - dragState.startX
+  const deltaY = event.clientY - dragState.startY
+  if (Math.abs(deltaX) + Math.abs(deltaY) > 4) dragState.moved = true
+  panelPosition.x = clamp(dragState.originX + deltaX, 12, Math.max(window.innerWidth - 280, 12))
+  panelPosition.y = clamp(dragState.originY + deltaY, 12, Math.max(window.innerHeight - 72, 12))
+}
+
+const handleDragEnd = (event: PointerEvent) => {
+  if (!dragState.active || dragState.pointerId !== event.pointerId) return
+  dragState.active = false
+  dragState.pointerId = -1
+  const target = event.currentTarget as HTMLElement
+  target?.removeEventListener('pointermove', handleDragMove)
+  target?.releasePointerCapture(event.pointerId)
+  persistPanelPosition()
+}
+
+const handleDragStart = (event: PointerEvent) => {
+  if (event.button !== 0) return
+  if ((event.target as HTMLElement).closest('.material-import-btn')) return
+  dragState.active = true
+  dragState.moved = false
+  dragState.pointerId = event.pointerId
+  dragState.startX = event.clientX
+  dragState.startY = event.clientY
+  dragState.originX = panelPosition.x
+  dragState.originY = panelPosition.y
+  ;(event.currentTarget as HTMLElement)?.setPointerCapture(event.pointerId)
+  ;(event.currentTarget as HTMLElement)?.addEventListener('pointermove', handleDragMove)
+  ;(event.currentTarget as HTMLElement)?.addEventListener('pointerup', handleDragEnd, { once: true })
+  ;(event.currentTarget as HTMLElement)?.addEventListener('pointercancel', handleDragEnd, { once: true })
+}
+
+const handleToggleClick = () => {
+  if (dragState.moved) {
+    dragState.moved = false
+    return
+  }
+  toggleOpen()
+}
+
+watch(positionStorageKey, loadPanelPosition)
+onMounted(loadPanelPosition)
 </script>
 
 <style scoped>
 .insight-container {
   position: fixed;
-  top: 120px;
-  right: 24px;
   z-index: 100;
   width: 260px;
   transition: width 0.4s cubic-bezier(0.16, 1, 0.3, 1);
@@ -128,8 +252,13 @@ const toggleOpen = () => emit('update:open', !props.open)
   box-shadow: 
     0 4px 6px -1px rgba(0, 0, 0, 0.05),
     0 10px 25px -5px rgba(13, 148, 136, 0.1);
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
   transition: all 0.3s ease;
+}
+
+.insight-container--dragging .premium-toggle {
+  cursor: grabbing;
 }
 
 .premium-toggle:hover {
@@ -162,6 +291,27 @@ const toggleOpen = () => emit('update:open', !props.open)
   align-items: center;
   gap: 6px;
   color: #64748b;
+}
+
+.material-import-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(13, 148, 136, 0.2);
+  border-radius: 999px;
+  background: rgba(240, 253, 250, 0.78);
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+
+.material-import-btn:hover {
+  border-color: rgba(13, 148, 136, 0.42);
+  background: #ccfbf1;
+  transform: translateY(-1px);
 }
 
 .status-label {
@@ -389,11 +539,7 @@ const toggleOpen = () => emit('update:open', !props.open)
 
 @media (max-width: 900px) {
   .insight-container {
-    top: auto;
-    right: 16px;
-    bottom: 24px;
     width: min(380px, calc(100vw - 32px));
   }
 }
 </style>
-
