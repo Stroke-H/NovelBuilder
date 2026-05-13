@@ -1,0 +1,15 @@
+{
+  "driver": "mysql",
+  "host": "127.0.0.1",
+  "port": 3306,
+  "username": "novel_user",
+  "password": "replace-with-your-database-password",
+  "database": "novel_generater",
+  "maxOpenConns": 10,
+  "maxIdleConns": 5,
+  "connMaxLifetime": "30m",
+  "timeout": "5s",
+  "readTimeout": "5s",
+  "writeTimeout": "5s",
+  "parseTime": true
+}
