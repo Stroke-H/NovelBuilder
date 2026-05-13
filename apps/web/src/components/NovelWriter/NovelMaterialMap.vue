@@ -71,6 +71,7 @@ const conflictDialogVisible = shallowRef(false)
 const selectedConflictCharacterIds = shallowRef<string[]>([])
 const nodePositionOverrides = reactive<Record<string, { x: number; y: number }>>({})
 const characterEditingMap = reactive<Record<string, boolean>>({})
+const materialEditingMap = reactive<Record<string, boolean>>({})
 const touchPoints = reactive<Record<number, { x: number; y: number }>>({})
 const touchGesture = reactive({
   active: false,
@@ -283,6 +284,13 @@ const isCharacterEditing = (nodeId: string) => Boolean(characterEditingMap[nodeI
 const setCharacterEditing = (nodeId: string, editing: boolean) => {
   if (editing) characterEditingMap[nodeId] = true
   else delete characterEditingMap[nodeId]
+}
+
+const isMaterialEditing = (nodeId: string) => Boolean(materialEditingMap[nodeId])
+
+const setMaterialEditing = (nodeId: string, editing: boolean) => {
+  if (editing) materialEditingMap[nodeId] = true
+  else delete materialEditingMap[nodeId]
 }
 
 const worldNode = computed<CanvasNode>(() => ({
@@ -570,6 +578,10 @@ const createConflict = () => {
 
 const addIdea = () => {
   form.raw_text = appendLine(form.raw_text, '新的阶段性灵感：')
+  nextTick(() => {
+    const lastIndex = Math.max(ideaNodes.value.length - 1, 0)
+    setMaterialEditing(`idea-${lastIndex}`, true)
+  })
 }
 
 const updateCharacter = (index: number, value: string) => {
@@ -734,6 +746,24 @@ const formatCharacterDisplayRows = (value: string) => {
     { label: '欲望', value: parsed.desire || '未填写' },
     { label: '弱点', value: parsed.weakness || '未填写' }
   ]
+}
+
+const formatMaterialDisplayRows = (value: string) => {
+  const lines = String(value || '')
+    .split('\n')
+    .map((item) => item.trim())
+    .filter(Boolean)
+
+  if (lines.length === 0) return [{ label: '内容', value: '未填写' }]
+
+  return lines.map((line) => {
+    const matched = line.match(/^([^:：]{1,14})[:：]\s*(.*)$/)
+    if (!matched) return { label: '内容', value: line }
+    return {
+      label: matched[1]?.trim() || '内容',
+      value: matched[2]?.trim() || '未填写'
+    }
+  })
 }
 
 onMounted(() => {
@@ -922,16 +952,37 @@ onMounted(() => {
               </div>
             </div>
           </template>
-          <el-input
-            v-else
-            class="node-interactive"
-            :model-value="node.value"
-            type="textarea"
-            :rows="node.type === 'world' ? 6 : node.type === 'conflict' ? 4 : 5"
-            resize="none"
-            :placeholder="node.type === 'world' ? '写入世界规则、时代、势力、限制条件...' : '直接在卡片内编辑内容'"
-            @update:model-value="updateNodeValue(node, String($event))"
-          />
+          <template v-else>
+            <div v-if="isMaterialEditing(node.id)" class="material-card-form">
+              <el-input
+                class="node-interactive"
+                :model-value="node.value"
+                type="textarea"
+                :rows="node.type === 'world' ? 7 : node.type === 'conflict' ? 5 : 5"
+                resize="none"
+                :placeholder="node.type === 'world' ? '写入世界规则、时代、势力、限制条件...' : '直接在卡片内编辑内容'"
+                @update:model-value="updateNodeValue(node, String($event))"
+              />
+              <div class="material-card-form__actions">
+                <el-button class="node-interactive" size="small" @click.stop="setMaterialEditing(node.id, false)">完成</el-button>
+              </div>
+            </div>
+            <div v-else class="material-card-display">
+              <dl class="material-card-display__rows">
+                <div
+                  v-for="(item, index) in formatMaterialDisplayRows(node.value)"
+                  :key="`${node.id}-${item.label}-${index}`"
+                  class="material-card-display__row"
+                >
+                  <dt>{{ item.label }}</dt>
+                  <dd>{{ item.value }}</dd>
+                </div>
+              </dl>
+              <div class="material-card-display__actions">
+                <el-button class="node-interactive" size="small" text @click.stop="setMaterialEditing(node.id, true)">编辑</el-button>
+              </div>
+            </div>
+          </template>
         </article>
       </div>
     </div>
@@ -1267,12 +1318,19 @@ onMounted(() => {
   gap: 10px;
 }
 
-.character-card-form__actions {
+.character-card-form__actions,
+.material-card-form__actions {
   display: flex;
   justify-content: flex-end;
 }
 
-.character-card-display {
+.material-card-form {
+  display: grid;
+  gap: 10px;
+}
+
+.character-card-display,
+.material-card-display {
   display: flex;
   min-height: 132px;
   flex-direction: column;
@@ -1280,33 +1338,52 @@ onMounted(() => {
   gap: 12px;
 }
 
-.character-card-display__rows {
+.material-card-display {
+  min-height: 112px;
+}
+
+.character-card-display__rows,
+.material-card-display__rows {
   display: grid;
   gap: 8px;
   margin: 0;
 }
 
-.character-card-display__row {
+.character-card-display__row,
+.material-card-display__row {
   display: grid;
   grid-template-columns: 52px minmax(0, 1fr);
   gap: 8px;
 }
 
-.character-card-display__row dt {
+.material-card-display__row {
+  grid-template-columns: minmax(52px, max-content) minmax(0, 1fr);
+}
+
+.character-card-display__row dt,
+.material-card-display__row dt {
   color: #0f766e;
   font-size: 12px;
   font-weight: 800;
 }
 
-.character-card-display__row dd {
+.material-card-display__row dt {
+  max-width: 92px;
+  word-break: break-word;
+}
+
+.character-card-display__row dd,
+.material-card-display__row dd {
   margin: 0;
   color: #0f172a;
   font-size: 13px;
   line-height: 1.45;
   word-break: break-word;
+  white-space: pre-wrap;
 }
 
-.character-card-display__actions {
+.character-card-display__actions,
+.material-card-display__actions {
   display: flex;
   justify-content: flex-end;
 }
