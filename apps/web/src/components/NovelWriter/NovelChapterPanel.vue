@@ -68,6 +68,19 @@ const compactList = (items?: string[], limit = 3) => {
     .slice(0, limit)
 }
 
+const outlineSpecItems = computed(() => {
+  const outline = selectedOutline.value
+  if (!outline) return []
+  const items: { label: string; values: string[] }[] = []
+  if (outline.goal) items.push({ label: '目标', values: [outline.goal] })
+  if (outline.conflict) items.push({ label: '冲突', values: [outline.conflict] })
+  if (compactList(outline.must_happen, 5).length) items.push({ label: '必发', values: compactList(outline.must_happen, 5) })
+  if (compactList(outline.key_scenes, 5).length) items.push({ label: '场景', values: compactList(outline.key_scenes, 5) })
+  if (compactList(outline.new_hooks, 5).length) items.push({ label: '新钩子', values: compactList(outline.new_hooks, 5) })
+  if (outline.hook) items.push({ label: '钩子', values: [outline.hook] })
+  return items
+})
+
 const selectOutline = (outlineId: string) => {
   previewVersionId.value = ''
   emit('selectOutline', outlineId)
@@ -100,23 +113,6 @@ const selectOutline = (outlineId: string) => {
         >
           <strong>{{ chapter.title }}</strong>
           <span v-if="chapter.summary" class="chapter-tab__summary">{{ chapter.summary }}</span>
-          <span class="chapter-tab__meta">目标：{{ chapter.goal || '待补充' }}</span>
-          <span class="chapter-tab__meta">冲突：{{ chapter.conflict || '待补充' }}</span>
-          <span
-            v-for="event in compactList(chapter.must_happen, 2)"
-            :key="`${chapter.id}-must-${event}`"
-            class="chapter-tab__spec"
-          >
-            必发：{{ event }}
-          </span>
-          <span
-            v-for="scene in compactList(chapter.key_scenes, 2)"
-            :key="`${chapter.id}-scene-${scene}`"
-            class="chapter-tab__spec"
-          >
-            场景：{{ scene }}
-          </span>
-          <em class="chapter-tab__hook">钩子：{{ chapter.hook || '待补充' }}</em>
           <small>{{ chapterStatusByOutlineId.get(chapter.id)?.status || '待生成' }}</small>
         </button>
         <el-empty v-if="!outline.chapters?.length" description="先生成大纲/章节结构" />
@@ -132,6 +128,17 @@ const selectOutline = (outlineId: string) => {
             <el-button size="small" :loading="running" @click="emit('audit', selectedChapter.id)">审计</el-button>
             <el-button size="small" :loading="running" @click="emit('revise', selectedChapter.id)">按审计修订</el-button>
             <el-button size="small" type="success" @click="emit('approve', selectedChapter.id)">确认章节</el-button>
+          </div>
+        </div>
+
+        <div v-if="outlineSpecItems.length" class="outline-spec-strip">
+          <div
+            v-for="item in outlineSpecItems"
+            :key="item.label"
+            class="outline-spec-strip__group"
+          >
+            <strong>{{ item.label }}</strong>
+            <span v-for="value in item.values" :key="`${item.label}-${value}`">{{ value }}</span>
           </div>
         </div>
 
@@ -182,10 +189,8 @@ const selectOutline = (outlineId: string) => {
 .chapter-panel {
   display: flex;
   flex-direction: column;
-  height: 100%;
   box-sizing: border-box;
   min-width: 0;
-  overflow: hidden;
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 24px;
@@ -240,9 +245,7 @@ const selectOutline = (outlineId: string) => {
   grid-template-columns: minmax(260px, 330px) minmax(0, 1fr);
   gap: 18px;
   align-items: stretch;
-  min-height: 0;
   min-width: 0;
-  overflow: hidden;
 }
 
 .chapter-layout > * {
@@ -252,8 +255,7 @@ const selectOutline = (outlineId: string) => {
 .chapter-tabs {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  max-height: 100%;
+  max-height: calc(100vh - 360px);
   gap: 10px;
   min-height: 0;
   overflow-y: auto;
@@ -320,15 +322,11 @@ const selectOutline = (outlineId: string) => {
 .chapter-preview {
   display: flex;
   flex-direction: column;
-  height: 100%;
-  min-height: 0;
   min-width: 0;
-  overflow: hidden;
 }
 
 .chapter-preview--empty {
   display: flex;
-  height: 100%;
   min-height: 260px;
   flex-direction: column;
   justify-content: center;
@@ -405,6 +403,40 @@ const selectOutline = (outlineId: string) => {
   color: #64748b;
 }
 
+.outline-spec-strip {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+  padding: 14px;
+  border: 1px solid #ccfbf1;
+  border-radius: 16px;
+  background: #f0fdfa;
+}
+
+.outline-spec-strip__group {
+  display: grid;
+  grid-template-columns: 62px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.outline-spec-strip__group strong {
+  color: #0f766e;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.outline-spec-strip__group span {
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.65;
+  word-break: break-word;
+}
+
+.outline-spec-strip__group span + span {
+  margin-top: 2px;
+}
+
 .chapter-actions {
   display: flex;
   flex-wrap: wrap;
@@ -436,14 +468,11 @@ const selectOutline = (outlineId: string) => {
 }
 
 .chapter-content {
-  flex: 1;
   box-sizing: border-box;
   width: 100%;
-  height: 100%;
-  max-height: 100%;
-  min-height: 0;
+  min-height: 560px;
+  max-height: none;
   margin: 0;
-  overflow: auto;
   padding: 20px;
   border-radius: 18px;
   background: #0f172a;

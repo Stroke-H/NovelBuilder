@@ -199,7 +199,7 @@ const updateReviewGridMinHeight = () => {
 }
 
 const reviewGridStyle = computed(() => ({
-  height: `${reviewGridMinHeight.value}px`
+  minHeight: `${reviewGridMinHeight.value}px`
 }))
 
 const refreshProjects = async () => {
@@ -674,18 +674,14 @@ watch(
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(380px, 460px);
   gap: 24px;
-  align-items: stretch;
+  align-items: start;
   flex: 1;
-  min-height: 0;
   min-width: 0;
 }
 
 .generation-audit-column {
   position: sticky;
   top: 24px;
-  align-self: stretch;
-  height: 100%;
-  min-height: 0;
   min-width: 0;
   width: 100%;
 }
