@@ -120,25 +120,23 @@ const selectOutline = (outlineId: string) => {
 
       <article v-if="selectedChapter" class="chapter-preview">
         <div class="chapter-preview__top">
-          <div>
+          <div class="chapter-preview__brief">
             <h4>{{ selectedChapter.title }}</h4>
-            <span>{{ selectedChapter.summary || '暂无摘要' }}</span>
+            <div v-if="outlineSpecItems.length" class="outline-spec-strip">
+              <div
+                v-for="item in outlineSpecItems"
+                :key="item.label"
+                class="outline-spec-strip__group"
+              >
+                <strong>{{ item.label }}</strong>
+                <span v-for="value in item.values" :key="`${item.label}-${value}`">{{ value }}</span>
+              </div>
+            </div>
           </div>
           <div class="chapter-actions">
             <el-button size="small" :loading="running" @click="emit('audit', selectedChapter.id)">审计</el-button>
             <el-button size="small" :loading="running" @click="emit('revise', selectedChapter.id)">按审计修订</el-button>
             <el-button size="small" type="success" @click="emit('approve', selectedChapter.id)">确认章节</el-button>
-          </div>
-        </div>
-
-        <div v-if="outlineSpecItems.length" class="outline-spec-strip">
-          <div
-            v-for="item in outlineSpecItems"
-            :key="item.label"
-            class="outline-spec-strip__group"
-          >
-            <strong>{{ item.label }}</strong>
-            <span v-for="value in item.values" :key="`${item.label}-${value}`">{{ value }}</span>
           </div>
         </div>
 
@@ -189,8 +187,10 @@ const selectOutline = (outlineId: string) => {
 .chapter-panel {
   display: flex;
   flex-direction: column;
+  height: 100%;
   box-sizing: border-box;
   min-width: 0;
+  overflow: hidden;
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 24px;
@@ -245,7 +245,9 @@ const selectOutline = (outlineId: string) => {
   grid-template-columns: minmax(260px, 330px) minmax(0, 1fr);
   gap: 18px;
   align-items: stretch;
+  min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .chapter-layout > * {
@@ -255,7 +257,8 @@ const selectOutline = (outlineId: string) => {
 .chapter-tabs {
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 360px);
+  height: 100%;
+  max-height: 100%;
   gap: 10px;
   min-height: 0;
   overflow-y: auto;
@@ -322,7 +325,10 @@ const selectOutline = (outlineId: string) => {
 .chapter-preview {
   display: flex;
   flex-direction: column;
+  height: 100%;
+  min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .chapter-preview--empty {
@@ -393,6 +399,13 @@ const selectOutline = (outlineId: string) => {
   min-width: 0;
 }
 
+.chapter-preview__brief {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 10px;
+  min-width: 0;
+}
+
 .chapter-preview__top h4 {
   margin: 0 0 6px;
   color: #0f172a;
@@ -405,9 +418,10 @@ const selectOutline = (outlineId: string) => {
 
 .outline-spec-strip {
   display: grid;
-  gap: 10px;
-  margin: 14px 0 0;
-  padding: 14px;
+  max-height: 170px;
+  gap: 8px;
+  overflow: auto;
+  padding: 12px;
   border: 1px solid #ccfbf1;
   border-radius: 16px;
   background: #f0fdfa;
@@ -441,7 +455,7 @@ const selectOutline = (outlineId: string) => {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
-  flex: 0 1 360px;
+  flex: 0 0 240px;
   gap: 8px;
 }
 
@@ -468,11 +482,13 @@ const selectOutline = (outlineId: string) => {
 }
 
 .chapter-content {
+  flex: 1;
   box-sizing: border-box;
   width: 100%;
-  min-height: 560px;
-  max-height: none;
+  min-height: 0;
+  max-height: 100%;
   margin: 0;
+  overflow: auto;
   padding: 20px;
   border-radius: 18px;
   background: #0f172a;
