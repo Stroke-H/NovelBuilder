@@ -53,8 +53,14 @@ defineProps<{
 
 <style scoped>
 .audit-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-height: 100%;
   box-sizing: border-box;
   min-width: 0;
+  width: 100%;
+  overflow: hidden;
   background: #ffffff;
   border: 1px solid #e2e8f0;
   border-radius: 24px;
@@ -126,8 +132,12 @@ defineProps<{
 
 .issue-list {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 10px;
+  max-height: 100%;
+  min-height: 0;
+  overflow: auto;
 }
 
 .issue-card {

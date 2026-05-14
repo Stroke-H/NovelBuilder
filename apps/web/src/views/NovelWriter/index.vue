@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, shallowRef } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, shallowRef, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { ArrowLeft } from '@element-plus/icons-vue'
 import NovelProjectList from '@/components/NovelWriter/NovelProjectList.vue'
@@ -32,6 +32,9 @@ const materialInsightsImported = shallowRef(false)
 const materialInsightsSnapshot = shallowRef<NovelExtractedInfo | null>(null)
 const materialPanelRef = shallowRef<InstanceType<typeof NovelMaterialPanel> | null>(null)
 const outlinePollingTimer = shallowRef<number | undefined>()
+const reviewGridRef = shallowRef<HTMLElement | null>(null)
+const reviewGridMinHeight = shallowRef(420)
+const runningActionLabel = shallowRef('')
 
 const workspaceSwitchItemClass = (step: 'materials' | 'generation') => [
   'workspace-switch__item',
@@ -174,6 +177,31 @@ const getErrorMessage = (error: unknown) => {
   return String(error)
 }
 
+const taskInProgressMessage = (label?: string) => {
+  if (label) return `${label}\u4efb\u52a1\u5df2\u7ecf\u5728\u540e\u53f0\u8fdb\u884c\uff0c\u8bf7\u7b49\u5f85\u4efb\u52a1\u7ed3\u675f`
+  return '\u540e\u53f0\u4efb\u52a1\u5df2\u7ecf\u5728\u8fdb\u884c\uff0c\u8bf7\u7b49\u5f85\u4efb\u52a1\u7ed3\u675f'
+}
+
+const notifyTaskInProgress = (label?: string) => {
+  ElMessage.warning(taskInProgressMessage(label))
+}
+
+const ensureActionAvailable = (label?: string) => {
+  if (!running.value) return true
+  notifyTaskInProgress(runningActionLabel.value || label)
+  return false
+}
+
+const updateReviewGridMinHeight = () => {
+  const element = reviewGridRef.value
+  if (!element) return
+  reviewGridMinHeight.value = Math.max(window.innerHeight - element.getBoundingClientRect().top - 24, 420)
+}
+
+const reviewGridStyle = computed(() => ({
+  height: `${reviewGridMinHeight.value}px`
+}))
+
 const refreshProjects = async () => {
   loading.value = true
   try {
@@ -294,7 +322,9 @@ const saveCurrentProject = async () => {
 
 const runProjectAction = async (label: string, action: () => Promise<NovelProject>) => {
   if (!selectedProject.value) return
+  if (!ensureActionAvailable(label)) return
   running.value = true
+  runningActionLabel.value = label
   try {
     const project = await action()
     syncSelectedProject(project)
@@ -304,6 +334,7 @@ const runProjectAction = async (label: string, action: () => Promise<NovelProjec
     ElMessage.error(`${label}失败：${getErrorMessage(error)}`)
   } finally {
     running.value = false
+    runningActionLabel.value = ''
   }
 }
 
@@ -318,6 +349,11 @@ const extractInfo = () => runProjectAction('信息提取', async () => {
 })
 
 const planOutline = async () => {
+  if (!ensureActionAvailable('生成大纲/章节结构')) return
+  if (selectedProject.value?.outline?.generation_status === 'generating') {
+    notifyTaskInProgress('生成大纲/章节结构')
+    return
+  }
   const project = await runProjectAction('大纲规划', async () => {
     await saveBeforeAIAction()
     return novelWriterApi.planOutline(selectedProject.value!.id)
@@ -447,7 +483,25 @@ const deleteProject = async (project: NovelProject) => {
 }
 
 onMounted(refreshProjects)
+onMounted(() => {
+  window.addEventListener('resize', updateReviewGridMinHeight)
+  nextTick(updateReviewGridMinHeight)
+})
 onBeforeUnmount(stopOutlinePolling)
+onBeforeUnmount(() => {
+  window.removeEventListener('resize', updateReviewGridMinHeight)
+})
+
+watch(
+  () => [
+    activeStep.value,
+    insightsOpen.value,
+    selectedProject.value?.id,
+    selectedProject.value?.chapters?.length,
+    selectedProject.value?.outline?.chapters?.length
+  ],
+  () => nextTick(updateReviewGridMinHeight)
+)
 </script>
 
 <template>
@@ -540,7 +594,7 @@ onBeforeUnmount(stopOutlinePolling)
             @import-materials="importMaterialsToInsights"
           />
 
-          <div class="generation-review-grid">
+          <div ref="reviewGridRef" class="generation-review-grid" :style="reviewGridStyle">
             <NovelChapterPanel
               :outline="selectedProject.outline"
               :selected-outline-id="selectedOutlineId"
@@ -607,8 +661,10 @@ onBeforeUnmount(stopOutlinePolling)
 
 .generation-workspace {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 24px;
+  min-height: 0;
   padding: 24px 32px;
   box-sizing: border-box;
   width: 100%;
@@ -616,15 +672,20 @@ onBeforeUnmount(stopOutlinePolling)
 
 .generation-review-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
+  grid-template-columns: minmax(0, 1fr) minmax(380px, 460px);
   gap: 24px;
-  align-items: start;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
   min-width: 0;
 }
 
 .generation-audit-column {
   position: sticky;
   top: 24px;
+  align-self: stretch;
+  height: 100%;
+  min-height: 0;
   min-width: 0;
   width: 100%;
 }

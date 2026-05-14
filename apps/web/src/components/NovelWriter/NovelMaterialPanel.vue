@@ -11,31 +11,32 @@
               {{ hasReference ? '已提供参考' : '无参考' }}
             </span>
           </div>
-          <p class="panel-desc">文风参考并非必须；若留空，AI 将根据题材自动匹配最佳创作风格。</p>
+          <p class="panel-desc">
+            文风参考并非必填；如果留空，AI 会根据题材自动匹配最合适的创作风格。
+          </p>
         </div>
         <div class="panel-actions">
-          <el-button class="action-btn" :loading="saving" @click="emit('save')">
-            <el-icon><DocumentChecked /></el-icon>
-            保存素材
-          </el-button>
-          <el-button class="action-btn" @click="openReferenceDialog">
-            <el-icon><EditPen /></el-icon>
-            {{ hasReference ? '编辑文风参考' : '添加文风参考' }}
-          </el-button>
-          <el-button type="primary" class="primary-action-btn" @click="emit('style')">
-            <el-icon><MagicStick /></el-icon>
-            生成文风画像
-          </el-button>
+          <div class="panel-actions__group">
+            <el-button class="action-btn" :loading="saving" @click="emit('save')">
+              <el-icon><DocumentChecked /></el-icon>
+              保存素材
+            </el-button>
+            <el-button class="action-btn" @click="openReferenceDialog">
+              <el-icon><EditPen /></el-icon>
+              {{ hasReference ? '编辑文风参考' : '添加文风参考' }}
+            </el-button>
+          </div>
+          <div class="panel-actions__stack">
+            <el-button type="primary" class="primary-action-btn" @click="emit('style')">
+              <el-icon><MagicStick /></el-icon>
+              生成文风画像
+            </el-button>
+            <el-button type="success" plain class="outline-btn" @click="emit('outline')">
+              <el-icon><Memo /></el-icon>
+              生成大纲/章节结构
+            </el-button>
+          </div>
         </div>
-      </div>
-
-      <div class="panel-divider"></div>
-
-      <div class="flow-actions">
-        <el-button type="success" plain class="outline-btn" @click="emit('outline')">
-          <el-icon><Memo /></el-icon>
-          生成大纲/章节结构
-        </el-button>
       </div>
     </div>
 
@@ -49,7 +50,7 @@
       <div class="reference-dialog">
         <div class="dialog-tip">
           <el-icon><InfoFilled /></el-icon>
-          <span>上传或粘贴参考片段，AI 将仅提取抽象文风规则，不会复制任何具体内容。</span>
+          <span>上传或粘贴参考片段，AI 仅提取抽象文风规则，不会复制任何具体内容。</span>
         </div>
         <div class="upload-area">
           <label class="file-upload-trigger">
@@ -129,7 +130,7 @@ const handleReferenceFile = (event: Event) => {
   input.value = ''
   if (!file) return
   if (!file.name.toLowerCase().endsWith('.txt')) {
-    ElMessage.warning('目前仅支持上传 txt 文本文件')
+    ElMessage.warning('目前仅支持上传 .txt 文本文件')
     return
   }
 
@@ -137,7 +138,7 @@ const handleReferenceFile = (event: Event) => {
   reader.onload = () => {
     referenceDraft.value = String(reader.result || '')
     form.reference_raw = referenceDraft.value
-    ElMessage.success('已读取 txt 文件内容作为文风参考')
+    ElMessage.success('已读取 .txt 文件内容作为文风参考')
   }
   reader.onerror = () => ElMessage.error('读取文件失败，请重试')
   reader.readAsText(file)
@@ -248,7 +249,19 @@ defineExpose({
 
 .panel-actions {
   display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.panel-actions__group {
+  display: flex;
   gap: 12px;
+}
+
+.panel-actions__stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .action-btn {
@@ -272,21 +285,10 @@ defineExpose({
   box-shadow: 0 6px 16px rgba(13, 148, 136, 0.3);
 }
 
-.panel-divider {
-  height: 1px;
-  background: linear-gradient(to right, #f1f5f9, #e2e8f0, #f1f5f9);
-  margin: 24px 0;
-}
-
-.flow-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
 .outline-btn {
   border-radius: 12px;
   font-weight: 600;
-  height: 42px;
+  height: 40px;
   padding: 0 20px;
 }
 
@@ -365,9 +367,19 @@ defineExpose({
     flex-direction: column;
     gap: 20px;
   }
+
   .panel-actions {
     width: 100%;
-    justify-content: flex-start;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .panel-actions__group,
+  .panel-actions__stack {
+    width: 100%;
+  }
+
+  .panel-actions__group {
     flex-wrap: wrap;
   }
 }
