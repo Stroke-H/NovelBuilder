@@ -187,8 +187,9 @@ const selectOutline = (outlineId: string) => {
 
 <style scoped>
 .chapter-panel {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 16px;
   height: 100%;
   box-sizing: border-box;
   min-width: 0;
@@ -201,19 +202,15 @@ const selectOutline = (outlineId: string) => {
 
 .panel-head {
   display: flex;
-  flex: 0 0 auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
-  margin-bottom: 18px;
 }
 
 .outline-progress {
   display: flex;
-  flex: 0 0 auto;
   align-items: center;
   min-height: 40px;
-  margin: -4px 0 16px;
   padding: 10px 13px;
   border: 1px solid #99f6e4;
   border-radius: 12px;
@@ -245,10 +242,10 @@ const selectOutline = (outlineId: string) => {
 
 .chapter-layout {
   display: grid;
-  flex: 1;
   grid-template-columns: minmax(260px, 330px) minmax(0, 1fr);
   gap: 18px;
   align-items: stretch;
+  height: 100%;
   min-height: 0;
   min-width: 0;
   overflow: hidden;
@@ -262,7 +259,6 @@ const selectOutline = (outlineId: string) => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  max-height: 100%;
   gap: 10px;
   min-height: 0;
   overflow-y: auto;
@@ -327,8 +323,9 @@ const selectOutline = (outlineId: string) => {
 }
 
 .chapter-preview {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 14px;
   height: 100%;
   min-height: 0;
   min-width: 0;
@@ -392,10 +389,10 @@ const selectOutline = (outlineId: string) => {
 
 .chapter-preview__top {
   display: flex;
-  flex: 0 0 auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
+  min-height: 0;
   padding-bottom: 14px;
   border-bottom: 1px solid #e2e8f0;
 }
@@ -406,7 +403,6 @@ const selectOutline = (outlineId: string) => {
 
 .chapter-preview__brief {
   display: grid;
-  flex: 1 1 0;
   gap: 10px;
   min-width: 0;
 }
@@ -468,10 +464,8 @@ const selectOutline = (outlineId: string) => {
 
 .version-strip {
   display: flex;
-  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 14px 0;
 }
 
 .version-chip {
@@ -490,11 +484,10 @@ const selectOutline = (outlineId: string) => {
 }
 
 .chapter-content {
-  flex: 1;
   box-sizing: border-box;
   width: 100%;
+  height: 100%;
   min-height: 0;
-  max-height: 100%;
   margin: 0;
   overflow: auto;
   overscroll-behavior: contain;

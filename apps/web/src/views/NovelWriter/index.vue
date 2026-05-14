@@ -687,6 +687,7 @@ watch(
   top: 24px;
   height: 100%;
   min-height: 0;
+  align-self: stretch;
   min-width: 0;
   width: 100%;
   overflow: hidden;

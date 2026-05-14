@@ -53,8 +53,10 @@ defineProps<{
 
 <style scoped>
 .audit-panel {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  gap: 16px;
+  height: 100%;
   box-sizing: border-box;
   min-width: 0;
   width: 100%;
@@ -68,7 +70,6 @@ defineProps<{
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 18px;
 }
 
 .audit-panel__kicker {
@@ -100,7 +101,6 @@ defineProps<{
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-  margin-bottom: 16px;
 }
 
 .score-card {
@@ -131,6 +131,9 @@ defineProps<{
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
 }
 
 .issue-card {
@@ -181,7 +184,6 @@ defineProps<{
 }
 
 .advice-box {
-  margin-top: 14px;
   padding: 14px;
   border-radius: 16px;
   background: #ecfeff;
