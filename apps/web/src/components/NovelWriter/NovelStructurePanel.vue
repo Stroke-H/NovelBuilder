@@ -31,7 +31,7 @@
           <section class="premium-section">
             <div class="section-header">
               <div class="section-title-box">
-                <span class="section-tag">DATABASE</span>
+                <span class="section-tag">事实库</span>
                 <h3 class="section-title">事实卡片</h3>
               </div>
               <div class="section-count" v-if="factCards.length">{{ factCards.length }}</div>
@@ -57,7 +57,7 @@
           <section class="premium-section">
             <div class="section-header">
               <div class="section-title-box">
-                <span class="section-tag">STYLE DNA</span>
+                <span class="section-tag">风格规则</span>
                 <h3 class="section-title">文风画像</h3>
               </div>
             </div>

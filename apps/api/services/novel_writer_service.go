@@ -114,16 +114,17 @@ type NovelStyleProfile struct {
 }
 
 type NovelChapter struct {
-	ID        string                `json:"id"`
-	OutlineID string                `json:"outline_id"`
-	Title     string                `json:"title"`
-	Status    string                `json:"status"`
-	Content   string                `json:"content"`
-	Summary   string                `json:"summary"`
-	Audit     NovelAuditReport      `json:"audit"`
-	Versions  []NovelChapterVersion `json:"versions"`
-	CreatedAt string                `json:"created_at"`
-	UpdatedAt string                `json:"updated_at"`
+	ID              string                `json:"id"`
+	OutlineID       string                `json:"outline_id"`
+	Title           string                `json:"title"`
+	Status          string                `json:"status"`
+	Content         string                `json:"content"`
+	Summary         string                `json:"summary"`
+	Audit           NovelAuditReport      `json:"audit"`
+	Versions        []NovelChapterVersion `json:"versions"`
+	ActiveVersionID string                `json:"active_version_id"`
+	CreatedAt       string                `json:"created_at"`
+	UpdatedAt       string                `json:"updated_at"`
 }
 
 type NovelChapterVersion struct {
@@ -257,6 +258,7 @@ func RegisterNovelWriterRoutes(api *gin.RouterGroup) {
 	novels.POST("/projects/:id/chapters/generate", GenerateNovelChapterHandler)
 	novels.POST("/projects/:id/chapters/:chapterId/audit", AuditNovelChapterHandler)
 	novels.POST("/projects/:id/chapters/:chapterId/revise", ReviseNovelChapterHandler)
+	novels.POST("/projects/:id/chapters/:chapterId/versions/:versionId/adopt", AdoptNovelChapterVersionHandler)
 	novels.POST("/projects/:id/chapters/:chapterId/approve", ApproveNovelChapterHandler)
 }
 
@@ -366,6 +368,10 @@ func UpdateNovelProjectHandler(c *gin.Context) {
 	}
 	project.Outline = req.Outline
 	project.StyleProfile = req.StyleProfile
+	project.Chapters = req.Chapters
+	project.Memory = req.Memory
+	project.Status = firstNonEmpty(strings.TrimSpace(req.Status), project.Status)
+	project.CurrentStage = firstNonEmpty(strings.TrimSpace(req.CurrentStage), project.CurrentStage)
 	project.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
 	if err := saveNovelProject(project); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -379,6 +385,47 @@ func shouldKeepPersistedOutline(persisted NovelOutline, incoming NovelOutline) b
 		return false
 	}
 	return persisted.GenerationStatus == "generating" || persisted.GenerationStatus == "ready"
+}
+
+func clampNovelAuditScore(value int) int {
+	if value < 0 {
+		return 0
+	}
+	if value > 100 {
+		return 100
+	}
+	return value
+}
+
+func normalizeNovelAuditReport(report *NovelAuditReport) {
+	values := []int{
+		report.TotalScore,
+		report.AIFlavorScore,
+		report.CharacterScore,
+		report.LogicScore,
+		report.StyleScore,
+	}
+	maxScore := 0
+	for _, value := range values {
+		if value > maxScore {
+			maxScore = value
+		}
+	}
+	legacyTenScale := maxScore > 0 && maxScore <= 10
+	scale := 1
+	if legacyTenScale {
+		scale = 10
+	}
+
+	report.AIFlavorScore = clampNovelAuditScore(report.AIFlavorScore * scale)
+	report.CharacterScore = clampNovelAuditScore(report.CharacterScore * scale)
+	report.LogicScore = clampNovelAuditScore(report.LogicScore * scale)
+	report.StyleScore = clampNovelAuditScore(report.StyleScore * scale)
+	report.TotalScore = clampNovelAuditScore(report.TotalScore * scale)
+
+	if report.TotalScore == 0 {
+		report.TotalScore = clampNovelAuditScore((report.AIFlavorScore + report.CharacterScore + report.LogicScore + report.StyleScore + 2) / 4)
+	}
 }
 
 func DeleteNovelProjectHandler(c *gin.Context) {
@@ -567,6 +614,7 @@ func GenerateNovelChapterHandler(c *gin.Context) {
 		Reason:    "AI 初稿",
 		CreatedAt: now,
 	})
+	chapter.ActiveVersionID = chapter.Versions[len(chapter.Versions)-1].ID
 	project.Chapters = append(project.Chapters, chapter)
 	project.CurrentStage = "chapter_drafting"
 	project.UpdatedAt = now
@@ -586,6 +634,11 @@ func AuditNovelChapterHandler(c *gin.Context) {
 	user := fmt.Sprintf(`审计以下章节。
 %s
 
+评分要求：
+1. total_score、ai_flavor_score、character_score、logic_score、style_score 全部使用 0-100 的整数。
+2. 分数越高表示质量越好，AI 味分数越高表示越自然、越不像 AI 生成。
+3. total_score 是综合分，必须与四项维度保持同一量纲，不要使用 10 分制。
+
 输出 JSON schema:
 {"total_score":0,"ai_flavor_score":0,"character_score":0,"logic_score":0,"style_score":0,"issues":[{"severity":"high|medium|low","title":"","detail":"","suggestion":""}],"revision_advice":""}
 
@@ -599,6 +652,7 @@ func AuditNovelChapterHandler(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	normalizeNovelAuditReport(&report)
 	chapter.Audit = report
 	chapter.Status = "reviewing"
 	chapter.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
@@ -633,8 +687,6 @@ func ReviseNovelChapterHandler(c *gin.Context) {
 		return
 	}
 	now := time.Now().Format("2006-01-02 15:04:05")
-	chapter.Content = revised.Content
-	chapter.Summary = firstNonEmpty(revised.Summary, chapter.Summary)
 	chapter.Status = "revision_needed"
 	chapter.UpdatedAt = now
 	chapter.Versions = append(chapter.Versions, NovelChapterVersion{
@@ -652,6 +704,39 @@ func ReviseNovelChapterHandler(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, project)
+}
+
+func AdoptNovelChapterVersionHandler(c *gin.Context) {
+	project, chapter, index, ok := getNovelProjectChapter(c)
+	if !ok {
+		return
+	}
+
+	versionID := strings.TrimSpace(c.Param("versionId"))
+	if versionID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "version id is required"})
+		return
+	}
+
+	for _, version := range chapter.Versions {
+		if version.ID != versionID {
+			continue
+		}
+		now := time.Now().Format("2006-01-02 15:04:05")
+		chapter.Content = version.Content
+		chapter.ActiveVersionID = version.ID
+		chapter.UpdatedAt = now
+		project.Chapters[index] = chapter
+		project.UpdatedAt = now
+		if err := saveNovelProjectPreservingGeneratedOutline(project); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, project)
+		return
+	}
+
+	c.JSON(http.StatusNotFound, gin.H{"error": "chapter version not found"})
 }
 
 func ApproveNovelChapterHandler(c *gin.Context) {
@@ -1170,10 +1255,7 @@ func novelModelContextTokens(model string) int {
 }
 
 func selectNovelProvider() (feishumodel.AIProviderConfig, error) {
-	config := feishumodel.GlobalAIConfig
-	if config == nil {
-		config = feishumodel.LoadAIConfig()
-	}
+	config := feishumodel.LoadAIConfig()
 	for _, capability := range []string{"novel_writing", "casual_chat_pro", "casual_chat", "chat"} {
 		providers := config.EffectiveProvidersByCapability(capability)
 		if len(providers) > 0 {

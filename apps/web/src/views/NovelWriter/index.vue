@@ -14,6 +14,7 @@ import {
   type CreateNovelProjectPayload,
   type NovelExtractedInfo,
   type NovelMaterials,
+  type NovelOutline,
   type NovelStyleProfile,
   type NovelProject
 } from '@/api/novelWriter'
@@ -25,16 +26,21 @@ const selectedChapterId = shallowRef('')
 const loading = shallowRef(false)
 const saving = shallowRef(false)
 const running = shallowRef(false)
+type WriterActionKey = '' | 'extract' | 'outline' | 'style' | 'generate' | 'audit' | 'revise' | 'adopt' | 'manualEdit' | 'approve'
 const createDialogVisible = shallowRef(false)
 const activeStep = shallowRef<'materials' | 'generation'>('materials')
 const insightsOpen = shallowRef(false)
+const generationVisited = shallowRef(false)
 const materialInsightsImported = shallowRef(false)
 const materialInsightsSnapshot = shallowRef<NovelExtractedInfo | null>(null)
 const materialPanelRef = shallowRef<InstanceType<typeof NovelMaterialPanel> | null>(null)
 const outlinePollingTimer = shallowRef<number | undefined>()
-const reviewGridRef = shallowRef<HTMLElement | null>(null)
-const reviewGridMinHeight = shallowRef(420)
 const runningActionLabel = shallowRef('')
+const activeAction = shallowRef<WriterActionKey>('')
+const activeActionTargetId = shallowRef('')
+const chapterPanelEditing = shallowRef(false)
+const materialMapEditing = shallowRef(false)
+const pendingPolledProject = shallowRef<NovelProject | null>(null)
 
 const workspaceSwitchItemClass = (step: 'materials' | 'generation') => [
   'workspace-switch__item',
@@ -67,6 +73,21 @@ const selectedAudit = computed(() => {
     issues: [],
     revision_advice: ''
   }
+})
+
+const hasLocalEditing = computed(() => chapterPanelEditing.value || materialMapEditing.value)
+
+const hasAuditResult = computed(() => {
+  const audit = selectedAudit.value
+  return Boolean(
+    audit.issues?.length
+    || audit.revision_advice?.trim()
+    || audit.total_score
+    || audit.ai_flavor_score
+    || audit.character_score
+    || audit.logic_score
+    || audit.style_score
+  )
 })
 
 const currentMaterials = computed({
@@ -192,15 +213,21 @@ const ensureActionAvailable = (label?: string) => {
   return false
 }
 
-const updateReviewGridMinHeight = () => {
-  const element = reviewGridRef.value
-  if (!element) return
-  reviewGridMinHeight.value = Math.max(window.innerHeight - element.getBoundingClientRect().top - 24, 420)
+const isActionLoading = (action: WriterActionKey, targetId = '') => {
+  if (!running.value || activeAction.value !== action) return false
+  return !targetId || activeActionTargetId.value === targetId
 }
 
-const reviewGridStyle = computed(() => ({
-  height: `${reviewGridMinHeight.value}px`
-}))
+const outlineProgress = (outline?: NovelOutline | null) => {
+  const chapters = outline?.chapters?.length || 0
+  const generated = outline?.generated_chapters || chapters
+  const target = outline?.target_chapters || 0
+  return {
+    generated,
+    target,
+    complete: target > 0 && generated >= target
+  }
+}
 
 const refreshProjects = async () => {
   loading.value = true
@@ -218,10 +245,14 @@ const refreshProjects = async () => {
 }
 
 const selectProject = (project: NovelProject) => {
+  chapterPanelEditing.value = false
+  materialMapEditing.value = false
+  pendingPolledProject.value = null
   selectedProject.value = project
   selectedOutlineId.value = project.outline?.chapters?.[0]?.id || ''
   selectedChapterId.value = project.chapters?.[0]?.id || ''
   activeStep.value = 'materials'
+  generationVisited.value = false
   materialInsightsImported.value = false
   materialInsightsSnapshot.value = null
   if (project.outline?.generation_status === 'generating') {
@@ -233,10 +264,14 @@ const selectProject = (project: NovelProject) => {
 
 const backToProjectList = () => {
   stopOutlinePolling()
+  chapterPanelEditing.value = false
+  materialMapEditing.value = false
+  pendingPolledProject.value = null
   selectedProject.value = null
   selectedOutlineId.value = ''
   selectedChapterId.value = ''
   insightsOpen.value = false
+  generationVisited.value = false
   materialInsightsImported.value = false
   materialInsightsSnapshot.value = null
 }
@@ -275,6 +310,9 @@ const createProject = async () => {
 }
 
 const syncSelectedProject = (project: NovelProject) => {
+  if (pendingPolledProject.value?.id === project.id) {
+    pendingPolledProject.value = null
+  }
   selectedProject.value = project
   projects.value = projects.value.map((item) => item.id === project.id ? project : item)
   const outlineExists = project.outline?.chapters?.some((chapter) => chapter.id === selectedOutlineId.value)
@@ -298,14 +336,26 @@ const startOutlinePolling = (projectId: string) => {
   outlinePollingTimer.value = window.setInterval(async () => {
     try {
       const project = await novelWriterApi.getProject(projectId)
-      syncSelectedProject(project)
-      if (project.outline?.generation_status !== 'generating') stopOutlinePolling()
+      const progress = outlineProgress(project.outline)
+      if (hasLocalEditing.value) pendingPolledProject.value = project
+      else syncSelectedProject(project)
+      if (project.outline?.generation_status !== 'generating' || progress.complete) stopOutlinePolling()
     } catch (error) {
       stopOutlinePolling()
       ElMessage.error(`刷新大纲进度失败：${getErrorMessage(error)}`)
     }
   }, 5000)
 }
+
+watch(
+  hasLocalEditing,
+  (editing) => {
+    if (editing || !pendingPolledProject.value) return
+    const project = pendingPolledProject.value
+    pendingPolledProject.value = null
+    syncSelectedProject(project)
+  }
+)
 
 const saveCurrentProject = async () => {
   if (!selectedProject.value) return
@@ -320,11 +370,18 @@ const saveCurrentProject = async () => {
   }
 }
 
-const runProjectAction = async (label: string, action: () => Promise<NovelProject>) => {
+const runProjectAction = async (
+  actionKey: WriterActionKey,
+  label: string,
+  action: () => Promise<NovelProject>,
+  targetId = ''
+) => {
   if (!selectedProject.value) return
   if (!ensureActionAvailable(label)) return
   running.value = true
   runningActionLabel.value = label
+  activeAction.value = actionKey
+  activeActionTargetId.value = targetId
   try {
     const project = await action()
     syncSelectedProject(project)
@@ -335,6 +392,8 @@ const runProjectAction = async (label: string, action: () => Promise<NovelProjec
   } finally {
     running.value = false
     runningActionLabel.value = ''
+    activeAction.value = ''
+    activeActionTargetId.value = ''
   }
 }
 
@@ -343,7 +402,7 @@ const saveBeforeAIAction = async () => {
   syncSelectedProject(await novelWriterApi.updateProject(selectedProject.value))
 }
 
-const extractInfo = () => runProjectAction('信息提取', async () => {
+const extractInfo = () => runProjectAction('extract', '信息提取', async () => {
   await saveBeforeAIAction()
   return novelWriterApi.extractInfo(selectedProject.value!.id)
 })
@@ -354,7 +413,7 @@ const planOutline = async () => {
     notifyTaskInProgress('生成大纲/章节结构')
     return
   }
-  const project = await runProjectAction('大纲规划', async () => {
+  const project = await runProjectAction('outline', '大纲规划', async () => {
     await saveBeforeAIAction()
     return novelWriterApi.planOutline(selectedProject.value!.id)
   })
@@ -368,7 +427,7 @@ const planOutline = async () => {
   }
 }
 
-const analyzeStyle = () => runProjectAction('文风画像', async () => {
+const analyzeStyle = () => runProjectAction('style', '文风画像', async () => {
   await saveBeforeAIAction()
   return novelWriterApi.analyzeStyle(selectedProject.value!.id)
 })
@@ -376,7 +435,10 @@ const analyzeStyle = () => runProjectAction('文风画像', async () => {
 const switchToGeneration = async () => {
   await saveBeforeAIAction()
   activeStep.value = 'generation'
-  insightsOpen.value = true
+  if (!generationVisited.value) {
+    insightsOpen.value = false
+    generationVisited.value = true
+  }
   await nextTick()
 }
 
@@ -405,7 +467,7 @@ const handleMaterialMapNext = async () => {
   }
 }
 
-const ensureOutlineReady = async () => {
+const ensureOutlineReady = async (preferredOutlineId = '') => {
   if (!selectedProject.value) throw new Error('请先选择小说项目')
   await saveBeforeAIAction()
 
@@ -427,19 +489,66 @@ const ensureOutlineReady = async () => {
     if (project.outline?.generation_status === 'generating') startOutlinePolling(project.id)
   }
 
-  const outlineId = selectedOutlineId.value || selectedProject.value.outline?.chapters?.[0]?.id || ''
+  const preferredExists = selectedProject.value.outline?.chapters?.some((chapter) => chapter.id === preferredOutlineId)
+  const outlineId = (preferredExists ? preferredOutlineId : '')
+    || selectedOutlineId.value
+    || selectedProject.value.outline?.chapters?.[0]?.id
+    || ''
   if (!outlineId) throw new Error('大纲生成失败：没有可用章节')
   selectedOutlineId.value = outlineId
   return outlineId
 }
 
-const generateChapter = () => runProjectAction('章节生成', async () => {
-  const outlineId = await ensureOutlineReady()
-  return novelWriterApi.generateChapter(selectedProject.value!.id, outlineId)
-})
-const auditChapter = (chapterId: string) => runProjectAction('章节审计', () => novelWriterApi.auditChapter(selectedProject.value!.id, chapterId))
-const reviseChapter = (chapterId: string) => runProjectAction('智能修订', () => novelWriterApi.reviseChapter(selectedProject.value!.id, chapterId))
-const approveChapter = (chapterId: string) => runProjectAction('章节确认', () => novelWriterApi.approveChapter(selectedProject.value!.id, chapterId))
+const generateChapter = (outlineId = '') => runProjectAction('generate', '章节生成', async () => {
+  const resolvedOutlineId = await ensureOutlineReady(outlineId)
+  return novelWriterApi.generateChapter(selectedProject.value!.id, resolvedOutlineId)
+}, outlineId || selectedOutlineId.value)
+const auditChapter = (chapterId: string) => runProjectAction('audit', '章节审计', () => novelWriterApi.auditChapter(selectedProject.value!.id, chapterId), chapterId)
+const reviseChapter = (chapterId: string) => runProjectAction('revise', '智能修订', () => novelWriterApi.reviseChapter(selectedProject.value!.id, chapterId), chapterId)
+const adoptChapterVersion = (chapterId: string, versionId: string) => runProjectAction('adopt', '版本选用', async () => {
+  try {
+    return await novelWriterApi.adoptChapterVersion(selectedProject.value!.id, chapterId, versionId)
+  } catch (error: any) {
+    if (error?.response?.status !== 404 || !selectedProject.value) throw error
+
+    const nextProject: NovelProject = {
+      ...selectedProject.value,
+      chapters: (selectedProject.value.chapters || []).map((chapter) => {
+        if (chapter.id !== chapterId) return chapter
+        const targetVersion = chapter.versions?.find((version) => version.id === versionId)
+        if (!targetVersion) return chapter
+        return {
+          ...chapter,
+          content: targetVersion.content,
+          active_version_id: versionId
+        }
+      })
+    }
+
+    return novelWriterApi.updateProject(nextProject)
+  }
+}, versionId)
+const saveManualChapterEdit = async (chapterId: string, content: string, versionId: string) => {
+  if (!selectedProject.value) return
+
+  const previousProject = selectedProject.value
+  const editedProject: NovelProject = {
+    ...selectedProject.value,
+    chapters: (selectedProject.value.chapters || []).map((chapter) => {
+      if (chapter.id !== chapterId) return chapter
+      return {
+        ...chapter,
+        content,
+        versions: (chapter.versions || []).map((version) => version.id === versionId ? { ...version, content } : version)
+      }
+    })
+  }
+
+  syncSelectedProject(editedProject)
+  const project = await runProjectAction('manualEdit', '正文编辑保存', () => novelWriterApi.updateProject(editedProject), chapterId)
+  if (!project) syncSelectedProject(previousProject)
+}
+const approveChapter = (chapterId: string) => runProjectAction('approve', '章节确认', () => novelWriterApi.approveChapter(selectedProject.value!.id, chapterId), chapterId)
 
 const exportProjectMarkdown = (project: NovelProject) => {
   const content = [
@@ -483,25 +592,7 @@ const deleteProject = async (project: NovelProject) => {
 }
 
 onMounted(refreshProjects)
-onMounted(() => {
-  window.addEventListener('resize', updateReviewGridMinHeight)
-  nextTick(updateReviewGridMinHeight)
-})
 onBeforeUnmount(stopOutlinePolling)
-onBeforeUnmount(() => {
-  window.removeEventListener('resize', updateReviewGridMinHeight)
-})
-
-watch(
-  () => [
-    activeStep.value,
-    insightsOpen.value,
-    selectedProject.value?.id,
-    selectedProject.value?.chapters?.length,
-    selectedProject.value?.outline?.chapters?.length
-  ],
-  () => nextTick(updateReviewGridMinHeight)
-)
 </script>
 
 <template>
@@ -524,6 +615,7 @@ watch(
           v-model="currentMaterials"
           :position-storage-key="selectedProject.id"
           :saving="saving"
+          @editing-state-change="materialMapEditing = $event"
           @save="saveCurrentProject"
           @extract="extractInfo"
           @next="handleMaterialMapNext"
@@ -553,24 +645,26 @@ watch(
         </NovelMaterialMap>
 
         <div v-else class="generation-workspace">
-          <div class="generation-switch-row">
-            <button class="workspace-back" type="button" @click="backToProjectList">
-              <el-icon><ArrowLeft /></el-icon>
-              <span>返回书籍列表</span>
-            </button>
-            <div class="workspace-switch">
-              <button
-                :class="workspaceSwitchItemClass('materials')"
-                @click="activeStep = 'materials'"
-              >
-                素材图谱
+          <div class="generation-sticky-shell">
+            <div class="generation-switch-row">
+              <button class="workspace-back" type="button" @click="backToProjectList">
+                <el-icon><ArrowLeft /></el-icon>
+                <span>返回书籍列表</span>
               </button>
-              <button
-                :class="workspaceSwitchItemClass('generation')"
-                @click="switchToGeneration"
-              >
-                文风生成
-              </button>
+              <div class="workspace-switch">
+                <button
+                  :class="workspaceSwitchItemClass('materials')"
+                  @click="activeStep = 'materials'"
+                >
+                  素材图谱
+                </button>
+                <button
+                  :class="workspaceSwitchItemClass('generation')"
+                  @click="switchToGeneration"
+                >
+                  文风生成
+                </button>
+              </div>
             </div>
           </div>
 
@@ -578,6 +672,8 @@ watch(
             ref="materialPanelRef"
             v-model="currentMaterials"
             :saving="saving"
+            :style-loading="isActionLoading('style')"
+            :outline-loading="isActionLoading('outline')"
             @save="saveCurrentProject"
             @outline="planOutline"
             @style="analyzeStyle"
@@ -594,23 +690,36 @@ watch(
             @import-materials="importMaterialsToInsights"
           />
 
-          <div ref="reviewGridRef" class="generation-review-grid" :style="reviewGridStyle">
+          <div class="generation-review-grid">
             <NovelChapterPanel
               :outline="selectedProject.outline"
               :selected-outline-id="selectedOutlineId"
               :chapters="selectedProject.chapters || []"
               :selected-chapter-id="selectedChapterId"
               :running="running"
+              :generate-loading-outline-id="isActionLoading('generate') ? activeActionTargetId : ''"
+              :audit-loading-chapter-id="isActionLoading('audit') ? activeActionTargetId : ''"
+              :adopt-loading-version-id="isActionLoading('adopt') ? activeActionTargetId : ''"
+              :manual-save-loading="isActionLoading('manualEdit', selectedChapter?.id || '')"
+              :approve-loading-chapter-id="isActionLoading('approve') ? activeActionTargetId : ''"
               @select-outline="selectedOutlineId = $event"
               @select-chapter="selectedChapterId = $event"
               @generate="generateChapter"
               @audit="auditChapter"
               @revise="reviseChapter"
+              @adopt="adoptChapterVersion"
+              @manual-save="saveManualChapterEdit"
+              @manual-edit-state-change="chapterPanelEditing = $event"
               @approve="approveChapter"
             />
 
             <aside class="generation-audit-column">
-              <NovelAuditPanel :audit="selectedAudit" />
+              <NovelAuditPanel
+                :audit="selectedAudit"
+                :revise-loading="isActionLoading('revise', selectedChapter?.id || '')"
+                :show-revise-action="hasAuditResult"
+                @revise="selectedChapter?.id && reviseChapter(selectedChapter.id)"
+              />
             </aside>
           </div>
         </div>
@@ -661,13 +770,23 @@ watch(
 
 .generation-workspace {
   display: flex;
-  flex: 1;
   flex-direction: column;
   gap: 24px;
-  min-height: 0;
+  min-height: 100vh;
   padding: 24px 32px;
   box-sizing: border-box;
   width: 100%;
+}
+
+.generation-sticky-shell {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: block;
+  padding-top: 12px;
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.98) 0%, rgba(248, 250, 252, 0.95) 78%, rgba(248, 250, 252, 0) 100%);
+  backdrop-filter: blur(10px);
 }
 
 .generation-review-grid {
@@ -675,16 +794,14 @@ watch(
   grid-template-columns: minmax(0, 1fr) minmax(380px, 460px);
   gap: 24px;
   align-items: stretch;
-  flex: 1;
   box-sizing: border-box;
-  min-height: 0;
+  height: calc(100vh - 32px);
+  min-height: 720px;
   min-width: 0;
   overflow: hidden;
 }
 
 .generation-audit-column {
-  position: sticky;
-  top: 24px;
   height: 100%;
   min-height: 0;
   align-self: stretch;
@@ -778,6 +895,8 @@ watch(
 @media (max-width: 1200px) {
   .generation-review-grid {
     grid-template-columns: 1fr;
+    height: auto;
+    min-height: 0;
   }
   .generation-audit-column {
     position: static;
@@ -786,6 +905,12 @@ watch(
   }
   .generation-workspace {
     padding: 16px;
+  }
+  .generation-sticky-shell {
+    top: 0;
+    padding-top: 0;
+    background: transparent;
+    backdrop-filter: none;
   }
 }
 

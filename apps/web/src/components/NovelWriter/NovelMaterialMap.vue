@@ -12,6 +12,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:modelValue': [value: NovelMaterials]
+  editingStateChange: [editing: boolean]
   save: []
   extract: []
   next: []
@@ -352,6 +353,10 @@ const canvasNodes = computed(() => [
   ...ideaNodes.value
 ])
 
+const hasInlineEditing = computed(() => {
+  return Object.keys(characterEditingMap).length > 0 || Object.keys(materialEditingMap).length > 0
+})
+
 const canvasEdges = computed<CanvasEdge[]>(() => {
   const edges: CanvasEdge[] = []
   characterNodes.value.forEach((node) => {
@@ -391,7 +396,10 @@ const zoomStyle = computed(() => ({
 
 watch(
   () => props.modelValue,
-  (value) => Object.assign(form, value),
+  (value) => {
+    if (hasInlineEditing.value) return
+    Object.assign(form, value)
+  },
   { deep: true }
 )
 
@@ -406,6 +414,14 @@ watch(
   () => {
     loadNodePositions()
     loadViewport()
+  },
+  { immediate: true }
+)
+
+watch(
+  hasInlineEditing,
+  (editing) => {
+    emit('editingStateChange', editing)
   },
   { immediate: true }
 )

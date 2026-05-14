@@ -113,6 +113,7 @@ export interface NovelChapter {
   summary: string
   audit: NovelAuditReport
   versions: NovelChapterVersion[]
+  active_version_id: string
   created_at: string
   updated_at: string
 }
@@ -199,6 +200,9 @@ export const novelWriterApi = {
   },
   reviseChapter(projectId: string, chapterId: string) {
     return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/revise`, undefined, novelAIRequestConfig) as Promise<NovelProject>
+  },
+  adoptChapterVersion(projectId: string, chapterId: string, versionId: string) {
+    return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/versions/${versionId}/adopt`) as Promise<NovelProject>
   },
   approveChapter(projectId: string, chapterId: string) {
     return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/approve`) as Promise<NovelProject>

@@ -2,40 +2,38 @@
   <section class="material-panel">
     <div class="panel-inner">
       <div class="panel-header">
-        <div class="header-info">
-          <div class="step-badge">Step 2</div>
-          <div class="title-row">
-            <h3 class="panel-title">文风生成准备</h3>
-            <span :class="['reference-status', { 'reference-status--ready': hasReference }]">
-              <span class="status-dot"></span>
-              {{ hasReference ? '已提供参考' : '无参考' }}
-            </span>
+        <div class="panel-header__main">
+          <div class="step-badge">步骤 2</div>
+          <div class="header-info">
+            <div class="title-row">
+              <h3 class="panel-title">文风生成准备</h3>
+              <span :class="['reference-status', { 'reference-status--ready': hasReference }]">
+                <span class="status-dot"></span>
+                {{ hasReference ? '已提供参考' : '无参考' }}
+              </span>
+            </div>
+            <p class="panel-desc">
+              文风参考并非必填；如果留空，AI 会根据题材自动匹配最合适的创作风格。
+            </p>
           </div>
-          <p class="panel-desc">
-            文风参考并非必填；如果留空，AI 会根据题材自动匹配最合适的创作风格。
-          </p>
         </div>
         <div class="panel-actions">
-          <div class="panel-actions__group">
-            <el-button class="action-btn" :loading="saving" @click="emit('save')">
-              <el-icon><DocumentChecked /></el-icon>
-              保存素材
-            </el-button>
-            <el-button class="action-btn" @click="openReferenceDialog">
-              <el-icon><EditPen /></el-icon>
-              {{ hasReference ? '编辑文风参考' : '添加文风参考' }}
-            </el-button>
-          </div>
-          <div class="panel-actions__stack">
-            <el-button type="primary" class="primary-action-btn" @click="emit('style')">
-              <el-icon><MagicStick /></el-icon>
-              生成文风画像
-            </el-button>
-            <el-button type="success" plain class="outline-btn" @click="emit('outline')">
-              <el-icon><Memo /></el-icon>
-              生成大纲/章节结构
-            </el-button>
-          </div>
+          <el-button class="action-btn" :loading="saving" @click="emit('save')">
+            <el-icon><DocumentChecked /></el-icon>
+            保存素材
+          </el-button>
+          <el-button class="action-btn" @click="openReferenceDialog">
+            <el-icon><EditPen /></el-icon>
+            {{ hasReference ? '编辑文风参考' : '添加文风参考' }}
+          </el-button>
+          <el-button type="primary" class="primary-action-btn" :loading="props.styleLoading" @click="emit('style')">
+            <el-icon><MagicStick /></el-icon>
+            生成文风画像
+          </el-button>
+          <el-button type="success" plain class="outline-btn" :loading="props.outlineLoading" @click="emit('outline')">
+            <el-icon><Memo /></el-icon>
+            生成大纲/章节结构
+          </el-button>
         </div>
       </div>
     </div>
@@ -87,6 +85,8 @@ import type { NovelMaterials } from '@/api/novelWriter'
 const props = defineProps<{
   modelValue: NovelMaterials
   saving: boolean
+  styleLoading: boolean
+  outlineLoading: boolean
 }>()
 
 const emit = defineEmits<{
@@ -166,15 +166,30 @@ defineExpose({
 }
 
 .panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 24px;
+}
+
+.panel-header__main {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  min-width: 0;
+}
+
+.header-info {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
 }
 
 .step-badge {
   display: inline-flex;
-  padding: 4px 12px;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 28px;
+  padding: 0 12px;
   background: #f0fdfa;
   color: #0d9488;
   font-size: 11px;
@@ -182,14 +197,13 @@ defineExpose({
   text-transform: uppercase;
   letter-spacing: 0.1em;
   border-radius: 8px;
-  margin-bottom: 12px;
 }
 
 .title-row {
   display: flex;
   align-items: center;
   gap: 16px;
-  margin-bottom: 8px;
+  min-width: 0;
 }
 
 .panel-title {
@@ -249,19 +263,10 @@ defineExpose({
 
 .panel-actions {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 14px;
-}
-
-.panel-actions__group {
-  display: flex;
-  gap: 12px;
-}
-
-.panel-actions__stack {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 
 .action-btn {
@@ -364,22 +369,18 @@ defineExpose({
 
 @media (max-width: 900px) {
   .panel-header {
-    flex-direction: column;
+    grid-template-columns: 1fr;
     gap: 20px;
+  }
+
+  .panel-header__main {
+    flex-direction: column;
+    gap: 12px;
   }
 
   .panel-actions {
     width: 100%;
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .panel-actions__group,
-  .panel-actions__stack {
-    width: 100%;
-  }
-
-  .panel-actions__group {
+    justify-content: flex-start;
     flex-wrap: wrap;
   }
 }

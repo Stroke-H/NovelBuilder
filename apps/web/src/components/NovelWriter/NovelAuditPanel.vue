@@ -1,52 +1,132 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import type { NovelAuditReport } from '@/api/novelWriter'
 
-defineProps<{
+const props = defineProps<{
   audit: NovelAuditReport
+  reviseLoading: boolean
+  showReviseAction: boolean
 }>()
+
+const emit = defineEmits<{
+  revise: []
+}>()
+
+const scoreGuide = [
+  '统一按 100 分制显示，分数越高越好。',
+  '90-100：质量优秀，可直接进入定稿或轻微润色。',
+  '75-89：整体良好，有少量可优化问题。',
+  '60-74：可读性尚可，但建议按审计意见修订。',
+  '0-59：问题较多，建议先修订再继续推进。',
+  'AI 味分数越高，表示文字越自然、越不像 AI 拼接生成。',
+  '四项维度分别是 AI 味、人物一致性、剧情逻辑、文风贴合。',
+  '若历史审计结果来自旧 10 分制，界面会自动换算为 100 分制显示。'
+]
+
+const usesLegacyTenScale = computed(() => {
+  const values = [
+    props.audit?.total_score || 0,
+    props.audit?.ai_flavor_score || 0,
+    props.audit?.character_score || 0,
+    props.audit?.logic_score || 0,
+    props.audit?.style_score || 0
+  ].filter((value) => value > 0)
+  return values.length > 0 && Math.max(...values) <= 10
+})
+
+const normalizeScore = (value: number, legacyTenScale: boolean) => {
+  const scaled = legacyTenScale ? value * 10 : value
+  return Math.max(0, Math.min(100, Math.round(scaled)))
+}
+
+const normalizedAudit = computed(() => {
+  const legacyTenScale = usesLegacyTenScale.value
+  const aiFlavorScore = normalizeScore(props.audit?.ai_flavor_score || 0, legacyTenScale)
+  const characterScore = normalizeScore(props.audit?.character_score || 0, legacyTenScale)
+  const logicScore = normalizeScore(props.audit?.logic_score || 0, legacyTenScale)
+  const styleScore = normalizeScore(props.audit?.style_score || 0, legacyTenScale)
+  const averageScore = Math.round((aiFlavorScore + characterScore + logicScore + styleScore) / 4)
+  const totalScore = normalizeScore(props.audit?.total_score || 0, legacyTenScale) || averageScore
+
+  return {
+    total_score: totalScore,
+    ai_flavor_score: aiFlavorScore,
+    character_score: characterScore,
+    logic_score: logicScore,
+    style_score: styleScore,
+    issues: props.audit?.issues || [],
+    revision_advice: props.audit?.revision_advice || ''
+  }
+})
+
+const formatSeverity = (severity: string) => {
+  if (severity === 'high') return '高风险'
+  if (severity === 'medium') return '中风险'
+  if (severity === 'low') return '低风险'
+  return severity || '未标记'
+}
 </script>
 
 <template>
   <section class="audit-panel">
     <div class="audit-panel__head">
-      <div>
-        <p class="audit-panel__kicker">Step 4</p>
-        <h3 class="audit-panel__title">自动审计/评分</h3>
+      <div class="audit-panel__title-row">
+        <div>
+          <p class="audit-panel__kicker">步骤 4</p>
+          <h3 class="audit-panel__title">自动审计/评分</h3>
+        </div>
+        <el-button
+          v-if="showReviseAction"
+          size="small"
+          class="audit-panel__revise-btn"
+          :loading="reviseLoading"
+          @click="emit('revise')"
+        >
+          按审计修订
+        </el-button>
       </div>
-      <div class="score-orb">{{ audit?.total_score || 0 }}</div>
+      <el-tooltip placement="left-start" effect="light" :show-after="120">
+        <template #content>
+          <div class="score-guide-tooltip">
+            <strong>评分说明</strong>
+            <p v-for="line in scoreGuide" :key="line">{{ line }}</p>
+          </div>
+        </template>
+        <div class="score-orb">{{ normalizedAudit.total_score }}</div>
+      </el-tooltip>
     </div>
 
     <div class="score-grid">
       <div class="score-card">
         <span>AI 味</span>
-        <strong>{{ audit?.ai_flavor_score || 0 }}</strong>
+        <strong>{{ normalizedAudit.ai_flavor_score }}</strong>
       </div>
       <div class="score-card">
         <span>人物一致性</span>
-        <strong>{{ audit?.character_score || 0 }}</strong>
+        <strong>{{ normalizedAudit.character_score }}</strong>
       </div>
       <div class="score-card">
         <span>剧情逻辑</span>
-        <strong>{{ audit?.logic_score || 0 }}</strong>
+        <strong>{{ normalizedAudit.logic_score }}</strong>
       </div>
       <div class="score-card">
         <span>文风贴合</span>
-        <strong>{{ audit?.style_score || 0 }}</strong>
+        <strong>{{ normalizedAudit.style_score }}</strong>
       </div>
     </div>
 
     <div class="issue-list">
-      <div v-for="issue in audit?.issues || []" :key="`${issue.title}-${issue.detail}`" class="issue-card">
-        <span :class="['issue-card__severity', `issue-card__severity--${issue.severity}`]">{{ issue.severity }}</span>
+      <div v-for="issue in normalizedAudit.issues" :key="`${issue.title}-${issue.detail}`" class="issue-card">
+        <span :class="['issue-card__severity', `issue-card__severity--${issue.severity}`]">{{ formatSeverity(issue.severity) }}</span>
         <strong>{{ issue.title }}</strong>
         <p>{{ issue.detail }}</p>
         <em>{{ issue.suggestion }}</em>
       </div>
-      <el-empty v-if="!audit?.issues?.length" description="暂无审计结果" />
+      <el-empty v-if="!normalizedAudit.issues.length" description="暂无审计结果" />
     </div>
 
-    <div v-if="audit?.revision_advice" class="advice-box">
-      {{ audit.revision_advice }}
+    <div v-if="normalizedAudit.revision_advice" class="advice-box">
+      {{ normalizedAudit.revision_advice }}
     </div>
   </section>
 </template>
@@ -70,6 +150,14 @@ defineProps<{
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
+}
+
+.audit-panel__title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
 }
 
 .audit-panel__kicker {
@@ -85,6 +173,10 @@ defineProps<{
   font-size: 20px;
 }
 
+.audit-panel__revise-btn {
+  flex: 0 0 auto;
+}
+
 .score-orb {
   display: grid;
   place-items: center;
@@ -95,6 +187,24 @@ defineProps<{
   color: #ffffff;
   font-size: 24px;
   font-weight: 900;
+  cursor: help;
+}
+
+.score-guide-tooltip {
+  max-width: 280px;
+  display: grid;
+  gap: 6px;
+  color: #0f172a;
+  line-height: 1.55;
+}
+
+.score-guide-tooltip strong {
+  font-size: 13px;
+}
+
+.score-guide-tooltip p {
+  margin: 0;
+  font-size: 12px;
 }
 
 .score-grid {
@@ -192,6 +302,12 @@ defineProps<{
 }
 
 @media (max-width: 900px) {
+  .audit-panel__head,
+  .audit-panel__title-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
   .score-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
