@@ -129,7 +129,9 @@ const selectOutline = (outlineId: string) => {
                 class="outline-spec-strip__group"
               >
                 <strong>{{ item.label }}</strong>
-                <span v-for="value in item.values" :key="`${item.label}-${value}`">{{ value }}</span>
+                <div class="outline-spec-strip__values">
+                  <span v-for="value in item.values" :key="`${item.label}-${value}`">{{ value }}</span>
+                </div>
               </div>
             </div>
           </div>
@@ -199,6 +201,7 @@ const selectOutline = (outlineId: string) => {
 
 .panel-head {
   display: flex;
+  flex: 0 0 auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
@@ -207,6 +210,7 @@ const selectOutline = (outlineId: string) => {
 
 .outline-progress {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   min-height: 40px;
   margin: -4px 0 16px;
@@ -388,6 +392,7 @@ const selectOutline = (outlineId: string) => {
 
 .chapter-preview__top {
   display: flex;
+  flex: 0 0 auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
@@ -401,7 +406,7 @@ const selectOutline = (outlineId: string) => {
 
 .chapter-preview__brief {
   display: grid;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   gap: 10px;
   min-width: 0;
 }
@@ -418,7 +423,7 @@ const selectOutline = (outlineId: string) => {
 
 .outline-spec-strip {
   display: grid;
-  max-height: 170px;
+  max-height: 150px;
   gap: 8px;
   overflow: auto;
   padding: 12px;
@@ -440,15 +445,17 @@ const selectOutline = (outlineId: string) => {
   line-height: 1.6;
 }
 
-.outline-spec-strip__group span {
+.outline-spec-strip__values {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.outline-spec-strip__values span {
   color: #334155;
   font-size: 13px;
   line-height: 1.65;
   word-break: break-word;
-}
-
-.outline-spec-strip__group span + span {
-  margin-top: 2px;
 }
 
 .chapter-actions {
@@ -461,6 +468,7 @@ const selectOutline = (outlineId: string) => {
 
 .version-strip {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 8px;
   margin: 14px 0;
@@ -489,6 +497,7 @@ const selectOutline = (outlineId: string) => {
   max-height: 100%;
   margin: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 20px;
   border-radius: 18px;
   background: #0f172a;

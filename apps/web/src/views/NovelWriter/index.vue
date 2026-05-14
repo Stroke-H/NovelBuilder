@@ -676,15 +676,20 @@ watch(
   gap: 24px;
   align-items: stretch;
   flex: 1;
+  box-sizing: border-box;
   min-height: 0;
   min-width: 0;
+  overflow: hidden;
 }
 
 .generation-audit-column {
   position: sticky;
   top: 24px;
+  height: 100%;
+  min-height: 0;
   min-width: 0;
   width: 100%;
+  overflow: hidden;
 }
 
 .workspace-switch {
@@ -775,6 +780,8 @@ watch(
   }
   .generation-audit-column {
     position: static;
+    height: auto;
+    overflow: visible;
   }
   .generation-workspace {
     padding: 16px;
