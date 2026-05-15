@@ -330,6 +330,21 @@ func generateStyleTemplateFromNovel(
 		return err
 	}
 
+	content := strings.TrimSpace(result.Content)
+	if content == "" {
+		content = buildFallbackStyleTemplateContent(observations)
+	}
+	if content == "" {
+		return fmt.Errorf("文风模版生成结果为空")
+	}
+
+	description := firstNonEmpty(
+		strings.TrimSpace(req.Description),
+		strings.TrimSpace(result.Description),
+		buildFallbackStyleTemplateDescription(observations),
+		"由整本参考小说逐章提炼生成",
+	)
+
 	settings, err := loadNovelWriterSettingsPayload()
 	if err != nil {
 		return err
@@ -339,10 +354,109 @@ func generateStyleTemplateFromNovel(
 	template := NovelStyleTemplate{
 		ID:          "TPL-" + uuid.NewString(),
 		Name:        firstNonEmpty(strings.TrimSpace(req.Name), strings.TrimSpace(result.Name), "整本参考小说文风模版"),
-		Description: firstNonEmpty(strings.TrimSpace(req.Description), strings.TrimSpace(result.Description), "由整本参考小说逐章提炼生成"),
-		Content:     strings.TrimSpace(result.Content),
+		Description: description,
+		Content:     content,
 		UpdatedAt:   now,
 	}
 	settings.StyleTemplates = append([]NovelStyleTemplate{template}, normalizeStyleTemplates(settings.StyleTemplates)...)
 	return saveNovelWriterLocalSettings(NovelWriterLocalSettings{StyleTemplates: settings.StyleTemplates})
+}
+
+func buildFallbackStyleTemplateDescription(observations []chapterStyleObservation) string {
+	if len(observations) == 0 {
+		return ""
+	}
+	summaries := make([]string, 0, minInt(len(observations), 2))
+	for _, observation := range observations {
+		summary := strings.TrimSpace(observation.Summary)
+		if summary == "" {
+			continue
+		}
+		summaries = append(summaries, summary)
+		if len(summaries) >= 2 {
+			break
+		}
+	}
+	if len(summaries) == 0 {
+		return "由整本参考小说逐章提炼生成"
+	}
+	return strings.Join(summaries, "；")
+}
+
+func buildFallbackStyleTemplateContent(observations []chapterStyleObservation) string {
+	if len(observations) == 0 {
+		return ""
+	}
+
+	joinTop := func(values []string, limit int) string {
+		trimmed := make([]string, 0, limit)
+		seen := map[string]bool{}
+		for _, value := range values {
+			text := strings.TrimSpace(value)
+			if text == "" || seen[text] {
+				continue
+			}
+			seen[text] = true
+			trimmed = append(trimmed, text)
+			if len(trimmed) >= limit {
+				break
+			}
+		}
+		return strings.Join(trimmed, "；")
+	}
+
+	collectBullets := func(values []string, limit int) []string {
+		result := make([]string, 0, limit)
+		seen := map[string]bool{}
+		for _, value := range values {
+			text := strings.TrimSpace(value)
+			if text == "" || seen[text] {
+				continue
+			}
+			seen[text] = true
+			result = append(result, text)
+			if len(result) >= limit {
+				break
+			}
+		}
+		return result
+	}
+
+	narrations := make([]string, 0, len(observations))
+	sentences := make([]string, 0, len(observations))
+	dialogues := make([]string, 0, len(observations))
+	rhythms := make([]string, 0, len(observations))
+	techniques := make([]string, 0, len(observations)*3)
+	avoidRules := make([]string, 0, len(observations)*3)
+	summaries := make([]string, 0, len(observations))
+
+	for _, observation := range observations {
+		narrations = append(narrations, observation.Narration)
+		sentences = append(sentences, observation.Sentence)
+		dialogues = append(dialogues, observation.Dialogue)
+		rhythms = append(rhythms, observation.Rhythm)
+		techniques = append(techniques, observation.Techniques...)
+		avoidRules = append(avoidRules, observation.AvoidRules...)
+		summaries = append(summaries, observation.Summary)
+	}
+
+	sections := []string{
+		"# 文风总述\n" + firstNonEmpty(joinTop(summaries, 3), "整体风格以稳定叙事、明确节奏和清晰人物表达为主。"),
+		"# 叙述规则\n" + firstNonEmpty(joinTop(narrations, 4), "保持稳定叙述视角，避免跳脱和信息堆砌。"),
+		"# 句式规则\n" + firstNonEmpty(joinTop(sentences, 4), "句式长短交替，保证阅读流动感与重点句落点。"),
+		"# 对话规则\n" + firstNonEmpty(joinTop(dialogues, 4), "对话服务人物性格与情节推进，避免无效对白。"),
+		"# 节奏规则\n" + firstNonEmpty(joinTop(rhythms, 4), "推进与停顿交替，关键节点需要明确钩子和情绪抬升。"),
+	}
+
+	techniqueBullets := collectBullets(techniques, 8)
+	if len(techniqueBullets) > 0 {
+		sections = append(sections, "# 建议模仿\n- "+strings.Join(techniqueBullets, "\n- "))
+	}
+
+	avoidBullets := collectBullets(avoidRules, 8)
+	if len(avoidBullets) > 0 {
+		sections = append(sections, "# 必须避免\n- "+strings.Join(avoidBullets, "\n- "))
+	}
+
+	return strings.TrimSpace(strings.Join(sections, "\n\n"))
 }
