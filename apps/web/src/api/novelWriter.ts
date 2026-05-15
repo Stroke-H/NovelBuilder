@@ -125,6 +125,17 @@ export interface NovelMemory {
   timeline: NovelInfoCard[]
 }
 
+export interface NovelRuntimeTask {
+  id: string
+  project_id: string
+  project_title: string
+  kind: string
+  title: string
+  status: string
+  started_at: string
+  updated_at: string
+}
+
 export interface NovelProject {
   id: string
   title: string
@@ -206,5 +217,11 @@ export const novelWriterApi = {
   },
   approveChapter(projectId: string, chapterId: string) {
     return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/approve`) as Promise<NovelProject>
+  },
+  listRuntimeTasks() {
+    return request.get('/novel-writer/tasks') as Promise<NovelRuntimeTask[]>
+  },
+  cancelRuntimeTask(taskId: string) {
+    return request.post(`/novel-writer/tasks/${taskId}/cancel`) as Promise<{ ok: boolean }>
   }
 }

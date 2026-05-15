@@ -8,6 +8,7 @@ import NovelMaterialPanel from '@/components/NovelWriter/NovelMaterialPanel.vue'
 import NovelStructurePanel from '@/components/NovelWriter/NovelStructurePanel.vue'
 import NovelChapterPanel from '@/components/NovelWriter/NovelChapterPanel.vue'
 import NovelAuditPanel from '@/components/NovelWriter/NovelAuditPanel.vue'
+import NovelTaskMonitorFloat from '@/components/NovelWriter/NovelTaskMonitorFloat.vue'
 import {
   emptyNovelMaterials,
   novelWriterApi,
@@ -15,6 +16,7 @@ import {
   type NovelExtractedInfo,
   type NovelMaterials,
   type NovelOutline,
+  type NovelRuntimeTask,
   type NovelStyleProfile,
   type NovelProject
 } from '@/api/novelWriter'
@@ -26,7 +28,7 @@ const selectedChapterId = shallowRef('')
 const loading = shallowRef(false)
 const saving = shallowRef(false)
 const running = shallowRef(false)
-type WriterActionKey = '' | 'extract' | 'outline' | 'style' | 'generate' | 'audit' | 'revise' | 'adopt' | 'manualEdit' | 'approve'
+type WriterActionKey = '' | 'extract' | 'outline' | 'style' | 'generate' | 'audit' | 'revise' | 'adopt' | 'manualEdit' | 'approve' | 'bulkGenerate' | 'bulkAudit'
 const createDialogVisible = shallowRef(false)
 const activeStep = shallowRef<'materials' | 'generation'>('materials')
 const insightsOpen = shallowRef(false)
@@ -41,6 +43,11 @@ const activeActionTargetId = shallowRef('')
 const chapterPanelEditing = shallowRef(false)
 const materialMapEditing = shallowRef(false)
 const pendingPolledProject = shallowRef<NovelProject | null>(null)
+const runtimeTasks = shallowRef<NovelRuntimeTask[]>([])
+const runtimeTasksLoading = shallowRef(false)
+const runtimeTaskCancelId = shallowRef('')
+const runtimeTaskTimer = shallowRef<number | undefined>()
+const runtimeTasksHydrated = shallowRef(false)
 
 const workspaceSwitchItemClass = (step: 'materials' | 'generation') => [
   'workspace-switch__item',
@@ -57,9 +64,12 @@ const createForm = reactive<CreateNovelProjectPayload>({
 
 const selectedChapter = computed(() => {
   const chapters = selectedProject.value?.chapters || []
-  return chapters.find((item) => item.id === selectedChapterId.value)
-    || chapters.find((item) => item.outline_id === selectedOutlineId.value)
-    || chapters[0]
+  const selectedById = chapters.find((item) => item.id === selectedChapterId.value)
+  if (selectedById) return selectedById
+  if (selectedOutlineId.value) {
+    return chapters.find((item) => item.outline_id === selectedOutlineId.value)
+  }
+  return chapters[0]
 })
 
 const selectedAudit = computed(() => {
@@ -89,6 +99,27 @@ const hasAuditResult = computed(() => {
     || audit.style_score
   )
 })
+
+const chapterHasContent = (chapter?: NovelProject['chapters'][number] | null) => {
+  if (!chapter) return false
+  if (chapter.content?.trim()) return true
+  return Boolean(chapter.versions?.some((item) => item.content?.trim()))
+}
+
+const chapterHasAuditResult = (chapter?: NovelProject['chapters'][number] | null) => {
+  if (!chapter) return false
+  const audit = chapter.audit
+  if (!audit) return false
+  return Boolean(
+    audit.issues?.length
+    || audit.revision_advice?.trim()
+    || audit.total_score
+    || audit.ai_flavor_score
+    || audit.character_score
+    || audit.logic_score
+    || audit.style_score
+  )
+}
 
 const currentMaterials = computed({
   get() {
@@ -229,6 +260,71 @@ const outlineProgress = (outline?: NovelOutline | null) => {
   }
 }
 
+const hasActiveRuntimeTask = (projectId: string, kind: string) => {
+  return runtimeTasks.value.some((task) => task.project_id === projectId && task.kind === kind)
+}
+
+const normalizeStaleOutlineProject = (project: NovelProject) => {
+  if (!runtimeTasksHydrated.value) return project
+  if (project.outline?.generation_status !== 'generating') return project
+  if (hasActiveRuntimeTask(project.id, 'outline')) return project
+  return {
+    ...project,
+    outline: {
+      ...project.outline,
+      generation_status: 'cancelled',
+      generation_error: project.outline.generation_error || '服务已重启，原大纲后台任务已中断'
+    }
+  }
+}
+
+const stopRuntimeTaskPolling = () => {
+  if (!runtimeTaskTimer.value) return
+  window.clearInterval(runtimeTaskTimer.value)
+  runtimeTaskTimer.value = undefined
+}
+
+const fetchRuntimeTasks = async (silent = false) => {
+  if (!silent) runtimeTasksLoading.value = true
+  try {
+    runtimeTasks.value = await novelWriterApi.listRuntimeTasks()
+    runtimeTasksHydrated.value = true
+    if (selectedProject.value) {
+      const normalizedProject = normalizeStaleOutlineProject(selectedProject.value)
+      if (normalizedProject !== selectedProject.value) {
+        syncSelectedProject(normalizedProject)
+        stopOutlinePolling()
+      }
+    }
+    projects.value = projects.value.map((project) => normalizeStaleOutlineProject(project))
+  } catch (error) {
+    if (!silent) ElMessage.error(`加载后台任务失败：${getErrorMessage(error)}`)
+  } finally {
+    if (!silent) runtimeTasksLoading.value = false
+  }
+}
+
+const startRuntimeTaskPolling = () => {
+  stopRuntimeTaskPolling()
+  fetchRuntimeTasks(true)
+  runtimeTaskTimer.value = window.setInterval(() => {
+    fetchRuntimeTasks(true)
+  }, 1500)
+}
+
+const cancelRuntimeTask = async (taskId: string) => {
+  runtimeTaskCancelId.value = taskId
+  try {
+    await novelWriterApi.cancelRuntimeTask(taskId)
+    await fetchRuntimeTasks(true)
+    ElMessage.success('后台任务终止指令已发送')
+  } catch (error) {
+    ElMessage.error(`终止后台任务失败：${getErrorMessage(error)}`)
+  } finally {
+    runtimeTaskCancelId.value = ''
+  }
+}
+
 const refreshProjects = async () => {
   loading.value = true
   try {
@@ -245,18 +341,19 @@ const refreshProjects = async () => {
 }
 
 const selectProject = (project: NovelProject) => {
+  const normalizedProject = normalizeStaleOutlineProject(project)
   chapterPanelEditing.value = false
   materialMapEditing.value = false
   pendingPolledProject.value = null
-  selectedProject.value = project
-  selectedOutlineId.value = project.outline?.chapters?.[0]?.id || ''
-  selectedChapterId.value = project.chapters?.[0]?.id || ''
+  selectedProject.value = normalizedProject
+  selectedOutlineId.value = normalizedProject.outline?.chapters?.[0]?.id || ''
+  selectedChapterId.value = normalizedProject.chapters?.find((chapter) => chapter.outline_id === selectedOutlineId.value)?.id || ''
   activeStep.value = 'materials'
   generationVisited.value = false
   materialInsightsImported.value = false
   materialInsightsSnapshot.value = null
-  if (project.outline?.generation_status === 'generating') {
-    startOutlinePolling(project.id)
+  if (normalizedProject.outline?.generation_status === 'generating' && hasActiveRuntimeTask(normalizedProject.id, 'outline')) {
+    startOutlinePolling(normalizedProject.id)
   } else {
     stopOutlinePolling()
   }
@@ -310,18 +407,19 @@ const createProject = async () => {
 }
 
 const syncSelectedProject = (project: NovelProject) => {
+  const normalizedProject = normalizeStaleOutlineProject(project)
   if (pendingPolledProject.value?.id === project.id) {
     pendingPolledProject.value = null
   }
-  selectedProject.value = project
-  projects.value = projects.value.map((item) => item.id === project.id ? project : item)
-  const outlineExists = project.outline?.chapters?.some((chapter) => chapter.id === selectedOutlineId.value)
-  if (!selectedOutlineId.value || !outlineExists) selectedOutlineId.value = project.outline?.chapters?.[0]?.id || ''
-  const chapterExists = project.chapters?.some((chapter) => chapter.id === selectedChapterId.value)
+  selectedProject.value = normalizedProject
+  projects.value = projects.value.map((item) => item.id === normalizedProject.id ? normalizedProject : item)
+  const outlineExists = normalizedProject.outline?.chapters?.some((chapter) => chapter.id === selectedOutlineId.value)
+  if (!selectedOutlineId.value || !outlineExists) selectedOutlineId.value = normalizedProject.outline?.chapters?.[0]?.id || ''
+  const chapterExists = normalizedProject.chapters?.some((chapter) => chapter.id === selectedChapterId.value)
   if (!selectedChapterId.value || !chapterExists) {
-    selectedChapterId.value = project.chapters?.find((chapter) => chapter.outline_id === selectedOutlineId.value)?.id
-      || project.chapters?.[0]?.id
-      || ''
+    selectedChapterId.value = selectedOutlineId.value
+      ? normalizedProject.chapters?.find((chapter) => chapter.outline_id === selectedOutlineId.value)?.id || ''
+      : normalizedProject.chapters?.[0]?.id || ''
   }
 }
 
@@ -336,6 +434,11 @@ const startOutlinePolling = (projectId: string) => {
   outlinePollingTimer.value = window.setInterval(async () => {
     try {
       const project = await novelWriterApi.getProject(projectId)
+      if (!hasActiveRuntimeTask(projectId, 'outline')) {
+        stopOutlinePolling()
+        syncSelectedProject(normalizeStaleOutlineProject(project))
+        return
+      }
       const progress = outlineProgress(project.outline)
       if (hasLocalEditing.value) pendingPolledProject.value = project
       else syncSelectedProject(project)
@@ -409,7 +512,11 @@ const extractInfo = () => runProjectAction('extract', '信息提取', async () =
 
 const planOutline = async () => {
   if (!ensureActionAvailable('生成大纲/章节结构')) return
-  if (selectedProject.value?.outline?.generation_status === 'generating') {
+  if (
+    selectedProject.value?.outline?.generation_status === 'generating'
+    && selectedProject.value
+    && hasActiveRuntimeTask(selectedProject.value.id, 'outline')
+  ) {
     notifyTaskInProgress('生成大纲/章节结构')
     return
   }
@@ -550,6 +657,97 @@ const saveManualChapterEdit = async (chapterId: string, content: string, version
 }
 const approveChapter = (chapterId: string) => runProjectAction('approve', '章节确认', () => novelWriterApi.approveChapter(selectedProject.value!.id, chapterId), chapterId)
 
+const generateAllChapters = async () => {
+  if (!selectedProject.value) return
+  if (!ensureActionAvailable('生成所有章节正文')) return
+
+  await saveBeforeAIAction()
+  const latestProject = selectedProject.value
+  const outlineChapters = latestProject.outline?.chapters || []
+  if (!outlineChapters.length) {
+    ElMessage.warning('请先生成大纲/章节结构')
+    return
+  }
+
+  const pendingOutlineIds = outlineChapters
+    .filter((outlineChapter) => {
+      const chapter = latestProject.chapters?.find((item) => item.outline_id === outlineChapter.id)
+      return !chapterHasContent(chapter) && !chapterHasAuditResult(chapter)
+    })
+    .map((outlineChapter) => outlineChapter.id)
+
+  if (!pendingOutlineIds.length) {
+    ElMessage.info('没有需要生成正文的章节')
+    return
+  }
+
+  running.value = true
+  runningActionLabel.value = '批量生成正文'
+  activeAction.value = 'bulkGenerate'
+  activeActionTargetId.value = ''
+
+  let successCount = 0
+  try {
+    for (const outlineId of pendingOutlineIds) {
+      const project = await novelWriterApi.generateChapter(selectedProject.value!.id, outlineId)
+      syncSelectedProject(project)
+      successCount += 1
+    }
+    ElMessage.success(`已生成 ${successCount} 章正文`)
+  } catch (error) {
+    ElMessage.error(`批量生成正文失败：${getErrorMessage(error)}`)
+  } finally {
+    running.value = false
+    runningActionLabel.value = ''
+    activeAction.value = ''
+    activeActionTargetId.value = ''
+  }
+}
+
+const auditAllChapters = async () => {
+  if (!selectedProject.value) return
+  if (!ensureActionAvailable('审计所有正文')) return
+
+  const outlineOrder = new Map(
+    (selectedProject.value.outline?.chapters || []).map((chapter, index) => [chapter.id, index])
+  )
+  const pendingChapterIds = [...(selectedProject.value.chapters || [])]
+    .sort((left, right) => {
+      const leftOrder = outlineOrder.get(left.outline_id) ?? Number.MAX_SAFE_INTEGER
+      const rightOrder = outlineOrder.get(right.outline_id) ?? Number.MAX_SAFE_INTEGER
+      return leftOrder - rightOrder
+    })
+    .filter((chapter) => chapterHasContent(chapter) && !chapterHasAuditResult(chapter))
+    .map((chapter) => chapter.id)
+
+  if (!pendingChapterIds.length) {
+    ElMessage.info('没有需要审计的正文')
+    return
+  }
+
+  running.value = true
+  runningActionLabel.value = '批量审计正文'
+  activeAction.value = 'bulkAudit'
+  activeActionTargetId.value = ''
+
+  let successCount = 0
+  try {
+    for (const chapterId of pendingChapterIds) {
+      const project = await novelWriterApi.auditChapter(selectedProject.value!.id, chapterId)
+      syncSelectedProject(project)
+      successCount += 1
+    }
+    ElMessage.success(`已审计 ${successCount} 章正文`)
+  } catch (error) {
+    ElMessage.error(`批量审计正文失败：${getErrorMessage(error)}`)
+  } finally {
+    running.value = false
+    runningActionLabel.value = ''
+    activeAction.value = ''
+    activeActionTargetId.value = ''
+  }
+}
+
 const exportProjectMarkdown = (project: NovelProject) => {
   const content = [
     `# ${project.title}`,
@@ -592,7 +790,9 @@ const deleteProject = async (project: NovelProject) => {
 }
 
 onMounted(refreshProjects)
+onMounted(startRuntimeTaskPolling)
 onBeforeUnmount(stopOutlinePolling)
+onBeforeUnmount(stopRuntimeTaskPolling)
 </script>
 
 <template>
@@ -699,6 +899,8 @@ onBeforeUnmount(stopOutlinePolling)
               :running="running"
               :generate-loading-outline-id="isActionLoading('generate') ? activeActionTargetId : ''"
               :audit-loading-chapter-id="isActionLoading('audit') ? activeActionTargetId : ''"
+              :bulk-generate-loading="isActionLoading('bulkGenerate')"
+              :bulk-audit-loading="isActionLoading('bulkAudit')"
               :adopt-loading-version-id="isActionLoading('adopt') ? activeActionTargetId : ''"
               :manual-save-loading="isActionLoading('manualEdit', selectedChapter?.id || '')"
               :approve-loading-chapter-id="isActionLoading('approve') ? activeActionTargetId : ''"
@@ -706,6 +908,8 @@ onBeforeUnmount(stopOutlinePolling)
               @select-chapter="selectedChapterId = $event"
               @generate="generateChapter"
               @audit="auditChapter"
+              @bulk-generate="generateAllChapters"
+              @bulk-audit="auditAllChapters"
               @revise="reviseChapter"
               @adopt="adoptChapterVersion"
               @manual-save="saveManualChapterEdit"
@@ -748,6 +952,14 @@ onBeforeUnmount(stopOutlinePolling)
         <el-button type="primary" :loading="saving" @click="createProject">创建</el-button>
       </template>
     </el-dialog>
+
+    <NovelTaskMonitorFloat
+      :tasks="runtimeTasks"
+      :loading="runtimeTasksLoading"
+      :cancel-loading-task-id="runtimeTaskCancelId"
+      @refresh="fetchRuntimeTasks()"
+      @cancel="cancelRuntimeTask"
+    />
   </div>
 </template>
 

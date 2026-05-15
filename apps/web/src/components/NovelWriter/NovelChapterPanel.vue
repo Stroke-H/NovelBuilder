@@ -10,6 +10,8 @@ const props = defineProps<{
   running: boolean
   generateLoadingOutlineId: string
   auditLoadingChapterId: string
+  bulkGenerateLoading: boolean
+  bulkAuditLoading: boolean
   adoptLoadingVersionId: string
   manualSaveLoading: boolean
   approveLoadingChapterId: string
@@ -20,6 +22,8 @@ const emit = defineEmits<{
   selectChapter: [id: string]
   generate: [outlineId: string]
   audit: [id: string]
+  bulkGenerate: []
+  bulkAudit: []
   revise: [id: string]
   adopt: [chapterId: string, versionId: string]
   manualSave: [chapterId: string, content: string, versionId: string]
@@ -86,12 +90,15 @@ const outlineGenerationText = computed(() => {
   if (props.outline.generation_status === 'failed') {
     return `后续章节大纲生成失败：${props.outline.generation_error || '请稍后重试'}`
   }
+  if (props.outline.generation_status === 'cancelled') {
+    return props.outline.generation_error || '大纲后台任务已终止'
+  }
   return ''
 })
 
 const outlineGenerationClass = computed(() => [
   'outline-progress',
-  { 'outline-progress--failed': props.outline.generation_status === 'failed' }
+  { 'outline-progress--failed': ['failed', 'cancelled'].includes(props.outline.generation_status) }
 ])
 
 const compactList = (items?: string[], limit = 3) => {
@@ -355,6 +362,14 @@ watch(
         <p class="panel-kicker">步骤 3</p>
         <h3 class="panel-title">分章生成 / 审计修订</h3>
       </div>
+      <div class="panel-head__actions">
+        <el-button size="small" :loading="bulkGenerateLoading" :disabled="running && !bulkGenerateLoading" @click="emit('bulkGenerate')">
+          生成所有章节正文
+        </el-button>
+        <el-button size="small" :loading="bulkAuditLoading" :disabled="running && !bulkAuditLoading" @click="emit('bulkAudit')">
+          审计所有正文
+        </el-button>
+      </div>
       <div v-if="outlineGenerationText" :class="outlineGenerationClass">
         <span>{{ outlineGenerationText }}</span>
       </div>
@@ -534,6 +549,13 @@ watch(
   align-items: center;
   flex: 0 0 auto;
   gap: 12px;
+}
+
+.panel-head__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .outline-progress {
@@ -1040,6 +1062,10 @@ watch(
   .panel-head {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .panel-head__actions {
+    flex-wrap: wrap;
   }
 
   .chapter-preview__top {

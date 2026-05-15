@@ -260,6 +260,8 @@ func RegisterNovelWriterRoutes(api *gin.RouterGroup) {
 	novels.POST("/projects/:id/chapters/:chapterId/revise", ReviseNovelChapterHandler)
 	novels.POST("/projects/:id/chapters/:chapterId/versions/:versionId/adopt", AdoptNovelChapterVersionHandler)
 	novels.POST("/projects/:id/chapters/:chapterId/approve", ApproveNovelChapterHandler)
+	novels.GET("/tasks", ListNovelRuntimeTasksHandler)
+	novels.POST("/tasks/:taskId/cancel", CancelNovelRuntimeTaskHandler)
 }
 
 func novelWriterAuthDisabled() bool {
@@ -440,12 +442,26 @@ func DeleteNovelProjectHandler(c *gin.Context) {
 	c.Status(http.StatusNoContent)
 }
 
+func ListNovelRuntimeTasksHandler(c *gin.Context) {
+	c.JSON(http.StatusOK, listNovelRuntimeTasks())
+}
+
+func CancelNovelRuntimeTaskHandler(c *gin.Context) {
+	if err := cancelNovelRuntimeTask(strings.TrimSpace(c.Param("taskId"))); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 func ExtractNovelInfoHandler(c *gin.Context) {
 	project, err := getNovelProject(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
+	taskCtx, task := beginNovelRuntimeTask(project, "extract", "信息提取")
+	defer task.finish()
 	system := "你是严谨的小说设定编辑。请只输出 JSON，不要输出 Markdown。"
 	user := fmt.Sprintf(`从以下素材中提取小说创作事实库。
 要求：
@@ -461,7 +477,11 @@ func ExtractNovelInfoHandler(c *gin.Context) {
 其他素材：%s`, project.Materials.CharacterRaw, project.Materials.WorldRaw, project.Materials.ConflictRaw, project.Materials.RawText)
 
 	var extracted NovelExtractedInfo
-	if err := callNovelAIJSON(system, user, &extracted); err != nil {
+	if err := callNovelAIJSONContext(taskCtx, system, user, &extracted); err != nil {
+		if isContextCanceledError(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": "信息提取任务已终止"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -481,6 +501,7 @@ func PlanNovelOutlineHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
+	taskCtx, task := beginNovelRuntimeTask(project, "outline", "大纲生成")
 	chapterCount := project.TargetChapters
 	if chapterCount <= 0 {
 		chapterCount = 8
@@ -489,8 +510,13 @@ func PlanNovelOutlineHandler(c *gin.Context) {
 	if chapterCount < batchSize {
 		batchSize = chapterCount
 	}
-	outline, err := generateNovelOutlineBatch(project, 1, batchSize, chapterCount, NovelOutline{})
+	outline, err := generateNovelOutlineBatch(taskCtx, project, 1, batchSize, chapterCount, NovelOutline{})
 	if err != nil {
+		task.finish()
+		if isContextCanceledError(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": "大纲生成任务已终止"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -503,14 +529,24 @@ func PlanNovelOutlineHandler(c *gin.Context) {
 		outline.GenerationStatus = "generating"
 	}
 	project.Outline = outline
+	// Regenerating the outline starts a new chapter plan, so stale chapter drafts,
+	// audits, and memory derived from the previous outline must be discarded.
+	project.Chapters = []NovelChapter{}
+	project.Memory = NovelMemory{}
 	project.CurrentStage = "outline_ready"
 	project.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
 	if err := saveNovelProject(project); err != nil {
+		task.finish()
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 	if outline.GenerationStatus == "generating" {
-		go continueNovelOutlineGeneration(project.ID)
+		go func() {
+			defer task.finish()
+			continueNovelOutlineGeneration(taskCtx, project.ID)
+		}()
+	} else {
+		task.finish()
 	}
 	c.JSON(http.StatusOK, project)
 }
@@ -521,6 +557,8 @@ func AnalyzeNovelStyleHandler(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 		return
 	}
+	taskCtx, task := beginNovelRuntimeTask(project, "style", "文风画像")
+	defer task.finish()
 	system := "你是文风分析师。你只能提炼抽象风格规则，不能复刻原文句子、设定、人物或情节。请只输出 JSON。"
 	referenceText := strings.TrimSpace(project.Materials.ReferenceRaw)
 	referenceInstruction := "用户未提供文风参考文本。请结合小说题材、事实库和商业网文可读性，生成一套原创、自然、不带明显 AI 味的默认文风画像。"
@@ -537,7 +575,11 @@ func AnalyzeNovelStyleHandler(c *gin.Context) {
 %s`, project.Title, project.Genre, mustJSON(project.Extracted), referenceInstruction)
 
 	var profile NovelStyleProfile
-	if err := callNovelAIJSON(system, user, &profile); err != nil {
+	if err := callNovelAIJSONContext(taskCtx, system, user, &profile); err != nil {
+		if isContextCanceledError(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": "文风画像任务已终止"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -564,6 +606,8 @@ func GenerateNovelChapterHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "outline chapter is required"})
 		return
 	}
+	taskCtx, task := beginNovelRuntimeTask(project, "chapter_generate", fmt.Sprintf("正文生成：%s", outline.Title))
+	defer task.finish()
 	targetWords := novelChapterTargetWords(project)
 	previousContext := previousNovelChapterContext(project, outline.ID, 3)
 	system := "你是小说写手。请原创生成正文，不要复刻参考文本的句子、人物、世界观或情节。输出 JSON。"
@@ -592,7 +636,11 @@ func GenerateNovelChapterHandler(c *gin.Context) {
 		AfterState NovelChapterState `json:"after_state"`
 		NewHooks   []string          `json:"new_hooks"`
 	}
-	if err := callNovelAIJSON(system, user, &generated); err != nil {
+	if err := callNovelAIJSONContext(taskCtx, system, user, &generated); err != nil {
+		if isContextCanceledError(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": "正文生成任务已终止"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -630,6 +678,8 @@ func AuditNovelChapterHandler(c *gin.Context) {
 	if !ok {
 		return
 	}
+	taskCtx, task := beginNovelRuntimeTask(project, "chapter_audit", fmt.Sprintf("章节审计：%s", chapter.Title))
+	defer task.finish()
 	system := "你是小说审计员，从 AI 味、人物一致性、剧情漏洞、文风贴合度审计章节。请只输出 JSON。"
 	user := fmt.Sprintf(`审计以下章节。
 %s
@@ -648,7 +698,11 @@ func AuditNovelChapterHandler(c *gin.Context) {
 章节正文：%s`, novelAuditSkillGuide, mustJSON(project.Extracted), mustJSON(project.StyleProfile), chapter.Title, truncateForAI(chapter.Content, 16000))
 
 	var report NovelAuditReport
-	if err := callNovelAIJSON(system, user, &report); err != nil {
+	if err := callNovelAIJSONContext(taskCtx, system, user, &report); err != nil {
+		if isContextCanceledError(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": "章节审计任务已终止"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -671,6 +725,8 @@ func ReviseNovelChapterHandler(c *gin.Context) {
 	if !ok {
 		return
 	}
+	taskCtx, task := beginNovelRuntimeTask(project, "chapter_revise", fmt.Sprintf("审计修订：%s", chapter.Title))
+	defer task.finish()
 	system := "你是小说修订者。根据审计意见修复问题，保留原章节优点。请只输出 JSON。"
 	user := fmt.Sprintf(`根据审计意见修订章节。
 输出 JSON schema: {"content":"","summary":""}
@@ -682,7 +738,11 @@ func ReviseNovelChapterHandler(c *gin.Context) {
 		Content string `json:"content"`
 		Summary string `json:"summary"`
 	}
-	if err := callNovelAIJSON(system, user, &revised); err != nil {
+	if err := callNovelAIJSONContext(taskCtx, system, user, &revised); err != nil {
+		if isContextCanceledError(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": "审计修订任务已终止"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -872,14 +932,17 @@ func hasChapterForOutline(chapters []NovelChapter, outlineID string) bool {
 	return false
 }
 
-func generateNovelOutlineBatchAdaptive(project NovelProject, startChapter int, totalChapters int, existing NovelOutline, preferredBatchSize int) (NovelOutline, int, error) {
+func generateNovelOutlineBatchAdaptive(ctx context.Context, project NovelProject, startChapter int, totalChapters int, existing NovelOutline, preferredBatchSize int) (NovelOutline, int, error) {
 	var lastErr error
 	for _, batchSize := range novelOutlineBatchCandidates(preferredBatchSize, totalChapters-startChapter+1) {
+		if ctx.Err() != nil {
+			return NovelOutline{}, 0, ctx.Err()
+		}
 		endChapter := startChapter + batchSize - 1
 		if endChapter > totalChapters {
 			endChapter = totalChapters
 		}
-		outline, err := generateNovelOutlineBatch(project, startChapter, endChapter, totalChapters, existing)
+		outline, err := generateNovelOutlineBatch(ctx, project, startChapter, endChapter, totalChapters, existing)
 		if err == nil {
 			return outline, batchSize, nil
 		}
@@ -911,7 +974,7 @@ func novelOutlineBatchCandidates(preferredBatchSize int, remainingChapters int) 
 	return candidates
 }
 
-func generateNovelOutlineBatch(project NovelProject, startChapter int, endChapter int, totalChapters int, existing NovelOutline) (NovelOutline, error) {
+func generateNovelOutlineBatch(ctx context.Context, project NovelProject, startChapter int, endChapter int, totalChapters int, existing NovelOutline) (NovelOutline, error) {
 	system := "你是商业小说结构规划师。请只输出 JSON，不要输出 Markdown。"
 	existingForPrompt := compactNovelOutlineForPrompt(existing)
 	user := fmt.Sprintf(`基于事实库生成小说大纲和第 %d-%d 章的完整章节规格。
@@ -935,7 +998,7 @@ func generateNovelOutlineBatch(project NovelProject, startChapter int, endChapte
 已有大纲摘要：%s`, startChapter, endChapter, novelOutlineSkillGuide, startChapter, endChapter, endChapter-startChapter+1, project.Title, project.Genre, totalChapters, mustJSON(compactNovelMaterialsForOutline(project.Materials)), mustJSON(compactNovelExtractedForPrompt(project.Extracted)), mustJSON(project.StyleProfile), mustJSON(existingForPrompt))
 
 	var batch NovelOutline
-	if err := callNovelAIJSONWithMaxTokens(system, user, &batch, novelOutlineMaxTokens(endChapter-startChapter+1)); err != nil {
+	if err := callNovelAIJSONWithMaxTokensContext(ctx, system, user, &batch, novelOutlineMaxTokens(endChapter-startChapter+1)); err != nil {
 		return NovelOutline{}, err
 	}
 	if len(batch.Chapters) == 0 {
@@ -1051,8 +1114,18 @@ func mergeNovelOutlineChapters(current []NovelChapterOutline, incoming []NovelCh
 	return result
 }
 
-func continueNovelOutlineGeneration(projectID string) {
+func continueNovelOutlineGeneration(ctx context.Context, projectID string) {
 	for {
+		if ctx.Err() != nil {
+			project, err := getNovelProject(projectID)
+			if err == nil {
+				project.Outline.GenerationStatus = "cancelled"
+				project.Outline.GenerationError = "大纲生成任务已终止"
+				project.Outline.GeneratedChapters = len(project.Outline.Chapters)
+				_ = saveNovelProjectOutline(project.ID, project.Outline)
+			}
+			return
+		}
 		project, err := getNovelProject(projectID)
 		if err != nil {
 			return
@@ -1077,8 +1150,15 @@ func continueNovelOutlineGeneration(projectID string) {
 			end = target
 		}
 		previousCount := len(project.Outline.Chapters)
-		outline, usedBatchSize, err := generateNovelOutlineBatchAdaptive(project, start, target, project.Outline, end-start+1)
+		outline, usedBatchSize, err := generateNovelOutlineBatchAdaptive(ctx, project, start, target, project.Outline, end-start+1)
 		if err != nil {
+			if isContextCanceledError(err) {
+				project.Outline.GenerationStatus = "cancelled"
+				project.Outline.GenerationError = "大纲生成任务已终止"
+				project.Outline.GeneratedChapters = len(project.Outline.Chapters)
+				_ = saveNovelProjectOutline(project.ID, project.Outline)
+				return
+			}
 			project.Outline.GenerationStatus = "failed"
 			project.Outline.GenerationError = err.Error()
 			project.Outline.GeneratedChapters = len(project.Outline.Chapters)
@@ -1170,16 +1250,24 @@ func previousNovelChapterContext(project NovelProject, outlineID string, limit i
 }
 
 func callNovelAIJSON(systemPrompt string, userPrompt string, target any) error {
-	return callNovelAIJSONWithMaxTokens(systemPrompt, userPrompt, target, 0)
+	return callNovelAIJSONContext(context.Background(), systemPrompt, userPrompt, target)
+}
+
+func callNovelAIJSONContext(ctx context.Context, systemPrompt string, userPrompt string, target any) error {
+	return callNovelAIJSONWithMaxTokensContext(ctx, systemPrompt, userPrompt, target, 0)
 }
 
 func callNovelAIJSONWithMaxTokens(systemPrompt string, userPrompt string, target any, maxTokens int) error {
+	return callNovelAIJSONWithMaxTokensContext(context.Background(), systemPrompt, userPrompt, target, maxTokens)
+}
+
+func callNovelAIJSONWithMaxTokensContext(ctx context.Context, systemPrompt string, userPrompt string, target any, maxTokens int) error {
 	provider, err := selectNovelProvider()
 	if err != nil {
 		return err
 	}
 	metrics := novelAIRequestMetrics(provider, systemPrompt, userPrompt, maxTokens)
-	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 110*time.Second)
 	defer cancel()
 	clientConfig := openai.DefaultConfig(provider.APIKey)
 	clientConfig.BaseURL = provider.BaseURL
@@ -1206,6 +1294,10 @@ func callNovelAIJSONWithMaxTokens(systemPrompt string, userPrompt string, target
 		return fmt.Errorf("%w; %s; output_runes=%d", err, metrics, len([]rune(resp.Choices[0].Message.Content)))
 	}
 	return nil
+}
+
+func isContextCanceledError(err error) bool {
+	return err == context.Canceled || (err != nil && strings.Contains(strings.ToLower(err.Error()), "context canceled"))
 }
 
 func novelOutlineMaxTokens(chapterCount int) int {

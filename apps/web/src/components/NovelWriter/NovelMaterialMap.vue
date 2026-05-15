@@ -160,6 +160,54 @@ const getCharacterNodeLabel = (value: string, fallback: string) => {
   return role === '人物' ? name : `${role}：${name}`
 }
 
+const getConflictNodeLabel = (value: string, fallback: string) => {
+  const firstLine = String(value || '')
+    .split('\n')
+    .map((item) => item.trim())
+    .find(Boolean) || ''
+  const matched = firstLine.match(/^([^:：]+)[:：]/)
+  const title = matched?.[1]?.trim() || firstLine.trim()
+  return title || fallback
+}
+
+const parseConflictMeta = (value: string) => {
+  const lines = String(value || '')
+    .split('\n')
+    .map((item) => item.trim())
+  const firstNonEmptyIndex = lines.findIndex(Boolean)
+  if (firstNonEmptyIndex < 0) {
+    return {
+      left: '',
+      right: '',
+      description: ''
+    }
+  }
+
+  const firstLine = lines[firstNonEmptyIndex] || ''
+  const matched = firstLine.match(/^([^:：]+)[:：]\s*(.*)$/)
+  const title = matched?.[1]?.trim() || firstLine.trim()
+  const descriptionLines = lines
+    .slice(firstNonEmptyIndex + 1)
+    .filter(Boolean)
+  const firstDescription = matched?.[2]?.trim() || ''
+  const [left = '', right = ''] = title.split(/\s*↔\s*/).map((item) => item.trim())
+
+  return {
+    left,
+    right,
+    description: [firstDescription, ...descriptionLines].filter(Boolean).join('\n')
+  }
+}
+
+const buildConflictValue = (left: string, right: string, description: string) => {
+  const cleanLeft = String(left || '').trim()
+  const cleanRight = String(right || '').trim()
+  const cleanDescription = String(description || '').trim()
+  const title = cleanRight ? `${cleanLeft} ↔ ${cleanRight}` : cleanLeft
+  if (!title) return cleanDescription
+  return cleanDescription ? `${title}：${cleanDescription}` : `${title}：`
+}
+
 const normalizeName = (value: string) => String(value || '').replace(/[，,；;。.\s:：]/g, '').toLowerCase()
 
 const replaceOrPrependLabeledLine = (text: string, label: string, nextValue: string) => {
@@ -319,12 +367,21 @@ const characterNodes = computed<CanvasNode[]>(() => {
   }))
 })
 
+const characterNameOptions = computed(() => {
+  const uniqueNames = new Set<string>()
+  characterNodes.value.forEach((node) => {
+    const name = getCharacterName(node.value, node.title).trim()
+    if (name) uniqueNames.add(name)
+  })
+  return Array.from(uniqueNames)
+})
+
 const conflictNodes = computed<CanvasNode[]>(() => {
   const baseY = 680 + Math.ceil(Math.max(characterNodes.value.length, 1) / 3) * 180
   return splitLines(form.conflict_raw).map((value, index) => ({
     id: `conflict-${index}`,
     type: 'conflict',
-    title: `冲突 ${index + 1}`,
+    title: getConflictNodeLabel(value, `冲突 ${index + 1}`),
     value,
     x: 240 + (index % 2) * 520,
     y: baseY + Math.floor(index / 2) * 230,
@@ -629,6 +686,16 @@ const updateConflict = (index: number, value: string) => {
   form.conflict_raw = cards.filter((item) => item.trim()).join('\n')
 }
 
+const updateConflictMeta = (node: CanvasNode, patch: Partial<ReturnType<typeof parseConflictMeta>>) => {
+  const index = Number(node.id.split('-')[1] || 0)
+  const current = parseConflictMeta(node.value)
+  const next = {
+    ...current,
+    ...patch
+  }
+  updateConflict(index, buildConflictValue(next.left, next.right, next.description))
+}
+
 const updateIdea = (index: number, value: string) => {
   const cards = [...ideaNodes.value.map((node) => node.value)]
   cards[index] = value
@@ -764,13 +831,23 @@ const formatCharacterDisplayRows = (value: string) => {
   ]
 }
 
-const formatMaterialDisplayRows = (value: string) => {
+const formatMaterialDisplayRows = (value: string, type: CanvasNode['type']) => {
   const lines = String(value || '')
     .split('\n')
     .map((item) => item.trim())
     .filter(Boolean)
 
   if (lines.length === 0) return [{ label: '内容', value: '未填写' }]
+
+  if (type === 'conflict') {
+    return lines.map((line) => {
+      const matched = line.match(/^([^:：]{1,40})[:：]\s*(.*)$/)
+      return {
+        label: '冲突',
+        value: (matched?.[2] || line).trim() || '未填写'
+      }
+    })
+  }
 
   return lines.map((line) => {
     const matched = line.match(/^([^:：]{1,14})[:：]\s*(.*)$/)
@@ -887,7 +964,42 @@ onMounted(() => {
           @drop.stop.prevent="handleCharacterDrop(node)"
         >
           <div class="canvas-node__header">
-            <div>
+            <div v-if="node.type === 'conflict' && isMaterialEditing(node.id)" class="conflict-header-editor">
+              <span>冲突</span>
+              <div class="conflict-header-editor__selectors">
+                <el-select
+                  :model-value="parseConflictMeta(node.value).left"
+                  class="node-interactive"
+                  filterable
+                  placeholder="人物一"
+                  @update:model-value="updateConflictMeta(node, { left: String($event || '') })"
+                >
+                  <el-option
+                    v-for="name in characterNameOptions"
+                    :key="`left-${node.id}-${name}`"
+                    :label="name"
+                    :value="name"
+                  />
+                </el-select>
+                <span class="conflict-header-editor__link">↔</span>
+                <el-select
+                  :model-value="parseConflictMeta(node.value).right"
+                  class="node-interactive"
+                  clearable
+                  filterable
+                  placeholder="人物二（可选）"
+                  @update:model-value="updateConflictMeta(node, { right: String($event || '') })"
+                >
+                  <el-option
+                    v-for="name in characterNameOptions"
+                    :key="`right-${node.id}-${name}`"
+                    :label="name"
+                    :value="name"
+                  />
+                </el-select>
+              </div>
+            </div>
+            <div v-else>
               <span v-if="node.type !== 'character'">{{ node.type }}</span>
               <span v-else>{{ getCharacterRole(node.value) }}</span>
               <strong>{{ node.title }}</strong>
@@ -972,12 +1084,14 @@ onMounted(() => {
             <div v-if="isMaterialEditing(node.id)" class="material-card-form">
               <el-input
                 class="node-interactive"
-                :model-value="node.value"
+                :model-value="node.type === 'conflict' ? parseConflictMeta(node.value).description : node.value"
                 type="textarea"
                 :rows="node.type === 'world' ? 7 : node.type === 'conflict' ? 5 : 5"
                 resize="none"
-                :placeholder="node.type === 'world' ? '写入世界规则、时代、势力、限制条件...' : '直接在卡片内编辑内容'"
-                @update:model-value="updateNodeValue(node, String($event))"
+                :placeholder="node.type === 'world' ? '写入世界规则、时代、势力、限制条件...' : node.type === 'conflict' ? '直接编辑冲突描述' : '直接在卡片内编辑内容'"
+                @update:model-value="node.type === 'conflict'
+                  ? updateConflictMeta(node, { description: String($event) })
+                  : updateNodeValue(node, String($event))"
               />
               <div class="material-card-form__actions">
                 <el-button class="node-interactive" size="small" @click.stop="setMaterialEditing(node.id, false)">完成</el-button>
@@ -986,7 +1100,7 @@ onMounted(() => {
             <div v-else class="material-card-display">
               <dl class="material-card-display__rows">
                 <div
-                  v-for="(item, index) in formatMaterialDisplayRows(node.value)"
+                  v-for="(item, index) in formatMaterialDisplayRows(node.value, node.type)"
                   :key="`${node.id}-${item.label}-${index}`"
                   class="material-card-display__row"
                 >
@@ -1327,6 +1441,34 @@ onMounted(() => {
   margin-top: 4px;
   color: #0f172a;
   font-size: 18px;
+}
+
+.conflict-header-editor {
+  display: grid;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.conflict-header-editor__selectors {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.conflict-header-editor__link {
+  color: #ea580c !important;
+  font-size: 16px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0 !important;
+  text-transform: none !important;
+  cursor: default !important;
+}
+
+.conflict-header-editor__selectors :deep(.el-select) {
+  min-width: 0;
 }
 
 .character-card-form {
