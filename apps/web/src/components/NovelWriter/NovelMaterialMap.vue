@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, reactive, shallowRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Connection, DocumentChecked, EditPen, MagicStick, Memo, Minus, Plus, UserFilled } from '@element-plus/icons-vue'
+import { Connection, DocumentChecked, EditPen, Memo, Minus, Plus, UserFilled } from '@element-plus/icons-vue'
 import type { NovelMaterials } from '@/api/novelWriter'
 
 const props = defineProps<{
@@ -889,10 +889,6 @@ onMounted(() => {
           <el-icon><DocumentChecked /></el-icon>
           <span>{{ saving ? '保存中' : '保存素材' }}</span>
         </button>
-        <button class="canvas-createbar__button canvas-createbar__button--extract" type="button" @click="emit('extract')">
-          <el-icon><MagicStick /></el-icon>
-          <span>信息提取</span>
-        </button>
         <button class="canvas-createbar__button canvas-createbar__button--outline" type="button" @click="emit('next')">
           <el-icon><Memo /></el-icon>
           <span>生成大纲</span>
@@ -1311,13 +1307,6 @@ onMounted(() => {
   background: #eff6ff;
   color: #2563eb;
   box-shadow: 0 12px 24px rgba(37, 99, 235, 0.13);
-}
-
-.canvas-createbar__button--extract:hover {
-  border-color: rgba(20, 184, 166, 0.45);
-  background: #f0fdfa;
-  color: #0f766e;
-  box-shadow: 0 12px 24px rgba(20, 184, 166, 0.16);
 }
 
 .canvas-createbar__button--outline:hover {

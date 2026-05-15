@@ -69,10 +69,11 @@ const draft = reactive<NovelWriterSettings>(cloneSettings(props.settings))
 const detailDialogVisible = shallowRef(false)
 const detailTemplateIndex = shallowRef(-1)
 const generatorDialogVisible = shallowRef(false)
-const generatorForm = reactive<GenerateStyleTemplatePayload>({
+const fileInputRef = shallowRef<HTMLInputElement | null>(null)
+const selectedSourceFile = shallowRef<File | null>(null)
+const generatorForm = reactive({
   name: '',
-  description: '',
-  source_text: ''
+  description: ''
 })
 
 watch(
@@ -156,21 +157,62 @@ const templatePreview = (content: string) => {
 const openGeneratorDialog = () => {
   generatorForm.name = ''
   generatorForm.description = ''
-  generatorForm.source_text = ''
+  selectedSourceFile.value = null
+  if (fileInputRef.value) fileInputRef.value.value = ''
   generatorDialogVisible.value = true
 }
 
-const startGenerateTemplate = () => {
-  if (!generatorForm.source_text.trim()) {
-    ElMessage.warning('请先粘贴整本参考小说内容')
+const triggerFileSelect = () => {
+  fileInputRef.value?.click()
+}
+
+const handleFileChange = (event: Event) => {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0] || null
+  if (!file) {
+    selectedSourceFile.value = null
     return
   }
-  emit('generateTemplate', {
-    name: generatorForm.name.trim(),
-    description: generatorForm.description.trim(),
-    source_text: generatorForm.source_text
-  })
-  generatorDialogVisible.value = false
+
+  const isTxtFile = file.type === 'text/plain' || file.name.toLowerCase().endsWith('.txt')
+  if (!isTxtFile) {
+    selectedSourceFile.value = null
+    input.value = ''
+    ElMessage.warning('暂时只支持选择 .txt 格式文件')
+    return
+  }
+
+  selectedSourceFile.value = file
+}
+
+const formatFileSize = (size: number) => {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+const startGenerateTemplate = async () => {
+  if (!selectedSourceFile.value) {
+    ElMessage.warning('请先选择一个 .txt 文件')
+    return
+  }
+
+  try {
+    const sourceText = await selectedSourceFile.value.text()
+    if (!sourceText.trim()) {
+      ElMessage.warning('当前文件内容为空，请重新选择')
+      return
+    }
+    emit('generateTemplate', {
+      name: generatorForm.name.trim(),
+      description: generatorForm.description.trim(),
+      source_text: sourceText
+    })
+    generatorDialogVisible.value = false
+  } catch (error) {
+    console.error('read style template source file failed', error)
+    ElMessage.error('读取文件失败，请重新选择后再试')
+  }
 }
 
 const saveSettings = () => {
@@ -402,13 +444,26 @@ const saveSettings = () => {
         <el-input v-model="generatorForm.name" placeholder="模版名称（可选）" />
         <el-input v-model="generatorForm.description" placeholder="模版说明（可选）" />
       </div>
-      <el-input
-        v-model="generatorForm.source_text"
-        type="textarea"
-        :rows="20"
-        resize="vertical"
-        placeholder="在这里粘贴整本参考小说内容..."
-      />
+      <input
+        ref="fileInputRef"
+        type="file"
+        accept=".txt,text/plain"
+        class="file-input-hidden"
+        @change="handleFileChange"
+      >
+      <div class="file-picker-card">
+        <div class="file-picker-card__info">
+          <strong>{{ selectedSourceFile ? selectedSourceFile.name : '尚未选择参考小说文件' }}</strong>
+          <p>
+            {{ selectedSourceFile
+              ? `已选择 TXT 文件 · ${formatFileSize(selectedSourceFile.size)}`
+              : '点击右侧按钮选择整本参考小说的 .txt 文件，确认后会自动读取内容并开始提炼。' }}
+          </p>
+        </div>
+        <el-button plain @click="triggerFileSelect">
+          选择 TXT 文件
+        </el-button>
+      </div>
     </div>
 
     <template #footer>
@@ -755,6 +810,40 @@ const saveSettings = () => {
   background: #fff7ed;
   border-color: #fed7aa;
   color: #9a3412;
+}
+
+.file-input-hidden {
+  display: none;
+}
+
+.file-picker-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px solid #dbe4ee;
+  border-radius: 14px;
+  background: #f8fafc;
+}
+
+.file-picker-card__info {
+  min-width: 0;
+}
+
+.file-picker-card__info strong {
+  display: block;
+  color: #0f172a;
+  font-size: 14px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.file-picker-card__info p {
+  margin: 6px 0 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.6;
 }
 
 @media (max-width: 1200px) {
