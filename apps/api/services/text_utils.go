@@ -1,6 +1,10 @@
 package services
 
-import "strings"
+import (
+	"regexp"
+	"strconv"
+	"strings"
+)
 
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
@@ -85,4 +89,74 @@ func maxInt(left int, right int) int {
 		return left
 	}
 	return right
+}
+
+type textChapterSegment struct {
+	Title   string `json:"title"`
+	Content string `json:"content"`
+}
+
+var chineseChapterHeadingPattern = regexp.MustCompile(`^\s*第[0-9零〇一二三四五六七八九十百千万两]+[章节回卷部篇].*$`)
+var englishChapterHeadingPattern = regexp.MustCompile(`(?i)^\s*(chapter|chap\.)\s*[0-9ivxlcdm]+\b.*$`)
+
+func splitTextIntoChapters(text string) []textChapterSegment {
+	normalized := strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+	lines := strings.Split(normalized, "\n")
+	segments := make([]textChapterSegment, 0)
+
+	var currentTitle string
+	currentLines := make([]string, 0)
+	flush := func() {
+		content := strings.TrimSpace(strings.Join(currentLines, "\n"))
+		if content == "" {
+			currentLines = currentLines[:0]
+			return
+		}
+		segments = append(segments, textChapterSegment{
+			Title:   firstNonEmpty(strings.TrimSpace(currentTitle), "未命名章节"),
+			Content: content,
+		})
+		currentLines = currentLines[:0]
+	}
+
+	for _, rawLine := range lines {
+		line := strings.TrimSpace(rawLine)
+		if line != "" && isChapterHeading(line) {
+			flush()
+			currentTitle = line
+			currentLines = append(currentLines, line)
+			continue
+		}
+		currentLines = append(currentLines, rawLine)
+	}
+	flush()
+
+	if len(segments) <= 1 {
+		return chunkTextSegments(normalized, 6000)
+	}
+	return segments
+}
+
+func isChapterHeading(line string) bool {
+	return chineseChapterHeadingPattern.MatchString(line) || englishChapterHeadingPattern.MatchString(line)
+}
+
+func chunkTextSegments(text string, chunkRunes int) []textChapterSegment {
+	cleaned := strings.TrimSpace(text)
+	if cleaned == "" {
+		return nil
+	}
+	runes := []rune(cleaned)
+	if chunkRunes <= 0 {
+		chunkRunes = 6000
+	}
+	segments := make([]textChapterSegment, 0, (len(runes)/chunkRunes)+1)
+	for start, index := 0, 1; start < len(runes); start, index = start+chunkRunes, index+1 {
+		end := minInt(start+chunkRunes, len(runes))
+		segments = append(segments, textChapterSegment{
+			Title:   "文本分段 " + strconv.Itoa(index),
+			Content: strings.TrimSpace(string(runes[start:end])),
+		})
+	}
+	return segments
 }

@@ -14,6 +14,7 @@ import NovelTaskMonitorFloat from '@/components/NovelWriter/NovelTaskMonitorFloa
 import {
   emptyNovelMaterials,
   emptyNovelWriterSettings,
+  type GenerateStyleTemplatePayload,
   novelWriterApi,
   type CreateNovelProjectPayload,
   type NovelExtractedInfo,
@@ -56,6 +57,8 @@ const runtimeTasksLoading = shallowRef(false)
 const runtimeTaskCancelId = shallowRef('')
 const runtimeTaskTimer = shallowRef<number | undefined>()
 const runtimeTasksHydrated = shallowRef(false)
+const styleTemplateTaskWasActive = shallowRef(false)
+const styleTemplateTaskLastStatus = shallowRef('')
 const bulkGenerateProgress = reactive({ current: 0, total: 0 })
 const bulkAuditProgress = reactive({ current: 0, total: 0 })
 const bulkReviseProgress = reactive({ current: 0, total: 0 })
@@ -297,6 +300,9 @@ const displayStyleProfile = computed<NovelStyleProfile>(() => {
 })
 
 const styleTemplates = computed(() => writerSettings.value.style_templates || [])
+const styleTemplateGenerationTask = computed(() => runtimeTasks.value.find((task) => task.kind === 'style_template_generate') || null)
+const styleTemplateGenerationLoading = computed(() => Boolean(styleTemplateGenerationTask.value))
+const styleTemplateGenerationLabel = computed(() => styleTemplateGenerationTask.value?.title || '整本小说提炼中')
 
 const getErrorMessage = (error: unknown) => {
   if (error && typeof error === 'object' && 'customMessage' in error) {
@@ -402,6 +408,16 @@ const saveWriterSettings = async (payload: NovelWriterSettings) => {
     ElMessage.error(`保存创作设置失败：${getErrorMessage(error)}`)
   } finally {
     settingsSaving.value = false
+  }
+}
+
+const startStyleTemplateGeneration = async (payload: GenerateStyleTemplatePayload) => {
+  try {
+    await novelWriterApi.generateStyleTemplate(payload)
+    await fetchRuntimeTasks(true)
+    ElMessage.success('整本参考小说提炼任务已进入后台')
+  } catch (error) {
+    ElMessage.error(`启动文风模版提炼失败：${getErrorMessage(error)}`)
   }
 }
 
@@ -563,6 +579,33 @@ watch(
     const project = pendingPolledProject.value
     pendingPolledProject.value = null
     syncSelectedProject(project)
+  }
+)
+
+watch(
+  styleTemplateGenerationLoading,
+  async (active) => {
+    if (active) {
+      styleTemplateTaskWasActive.value = true
+      styleTemplateTaskLastStatus.value = styleTemplateGenerationTask.value?.status || ''
+      return
+    }
+    if (!styleTemplateTaskWasActive.value) return
+    styleTemplateTaskWasActive.value = false
+    await loadWriterSettings(true)
+    if (styleTemplateTaskLastStatus.value === 'cancelling') {
+      ElMessage.info('文风模版提炼任务已终止')
+    } else {
+      ElMessage.success('文风模版提炼已完成，书架已刷新')
+    }
+    styleTemplateTaskLastStatus.value = ''
+  }
+)
+
+watch(
+  () => styleTemplateGenerationTask.value?.status || '',
+  (status) => {
+    if (status) styleTemplateTaskLastStatus.value = status
   }
 )
 
@@ -1406,7 +1449,10 @@ onBeforeUnmount(stopRuntimeTaskPolling)
       :settings="writerSettings"
       :loading="settingsLoading"
       :saving="settingsSaving"
+      :template-generation-loading="styleTemplateGenerationLoading"
+      :template-generation-label="styleTemplateGenerationLabel"
       @save="saveWriterSettings"
+      @generate-template="startStyleTemplateGeneration"
     />
 
     <NovelTaskMonitorFloat

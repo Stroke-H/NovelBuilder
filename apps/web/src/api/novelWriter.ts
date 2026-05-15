@@ -205,6 +205,12 @@ export interface NovelWriterSettings {
   style_templates: NovelStyleTemplate[]
 }
 
+export interface GenerateStyleTemplatePayload {
+  name: string
+  description: string
+  source_text: string
+}
+
 export interface NovelProject {
   id: string
   title: string
@@ -312,6 +318,9 @@ export const novelWriterApi = {
   },
   updateSettings(payload: NovelWriterSettings) {
     return request.put('/novel-writer/settings', payload) as Promise<NovelWriterSettings>
+  },
+  generateStyleTemplate(payload: GenerateStyleTemplatePayload) {
+    return request.post('/novel-writer/settings/style-templates/generate', payload, novelLongAIRequestConfig) as Promise<{ ok: boolean; task_id: string }>
   },
   listRuntimeTasks() {
     return request.get('/novel-writer/tasks') as Promise<NovelRuntimeTask[]>

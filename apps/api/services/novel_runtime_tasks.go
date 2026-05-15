@@ -80,6 +80,25 @@ func (entry *novelRuntimeTaskEntry) cancelTask() {
 	entry.cancel()
 }
 
+func (entry *novelRuntimeTaskEntry) update(title string, status string) {
+	if entry == nil {
+		return
+	}
+	novelRuntimeTaskRegistry.mu.Lock()
+	defer novelRuntimeTaskRegistry.mu.Unlock()
+	stored := novelRuntimeTaskRegistry.tasks[entry.task.ID]
+	if stored == nil {
+		return
+	}
+	if title != "" {
+		stored.task.Title = title
+	}
+	if status != "" {
+		stored.task.Status = status
+	}
+	stored.task.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
+}
+
 func listNovelRuntimeTasks() []NovelRuntimeTask {
 	novelRuntimeTaskRegistry.mu.Lock()
 	defer novelRuntimeTaskRegistry.mu.Unlock()
