@@ -10,6 +10,7 @@ defineProps<{
 const emit = defineEmits<{
   select: [project: NovelProject]
   create: []
+  settings: []
   export: [project: NovelProject]
   delete: [project: NovelProject]
 }>()
@@ -35,7 +36,10 @@ const formatStage = (stage: string) => stageLabelMap[stage] || '编辑中'
         <h2 class="project-list__title">小说创作入口</h2>
         <p class="project-list__desc">选择一本正在编辑或已保存的小说，继续进入素材图谱与文风生成流程。</p>
       </div>
-      <el-button type="primary" @click="emit('create')">新建小说</el-button>
+      <div class="project-list__header-actions">
+        <el-button @click="emit('settings')">设置</el-button>
+        <el-button type="primary" @click="emit('create')">新建小说</el-button>
+      </div>
     </div>
 
     <el-skeleton v-if="loading" :rows="4" animated />
@@ -112,6 +116,12 @@ const formatStage = (stage: string) => stageLabelMap[stage] || '编辑中'
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 18px;
+}
+
+.project-list__header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .project-list__eyebrow {

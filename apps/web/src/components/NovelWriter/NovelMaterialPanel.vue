@@ -34,6 +34,10 @@
             <el-icon><Memo /></el-icon>
             生成大纲/章节结构
           </el-button>
+          <el-button type="warning" class="pipeline-btn" :loading="props.pipelineLoading" @click="emit('pipeline')">
+            <el-icon><Memo /></el-icon>
+            {{ props.pipelineLabel || 'AI一条龙' }}
+          </el-button>
         </div>
       </div>
     </div>
@@ -56,6 +60,29 @@
             <span>点击上传 .txt 文件</span>
             <input type="file" accept=".txt,text/plain" @change="handleReferenceFile">
           </label>
+        </div>
+        <div v-if="props.styleTemplates.length" class="template-picker">
+          <div class="template-picker__label">套用文风模版</div>
+          <el-select
+            v-model="selectedTemplateId"
+            placeholder="选择已有文风模版"
+            clearable
+            filterable
+            class="template-picker__select"
+            @change="applyStyleTemplate"
+          >
+            <el-option
+              v-for="template in props.styleTemplates"
+              :key="template.id"
+              :label="template.name"
+              :value="template.id"
+            >
+              <div class="template-option">
+                <strong>{{ template.name }}</strong>
+                <span v-if="template.description">{{ template.description }}</span>
+              </div>
+            </el-option>
+          </el-select>
         </div>
         <el-input
           v-model="referenceDraft"
@@ -80,13 +107,16 @@
 import { computed, reactive, shallowRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { DocumentChecked, EditPen, MagicStick, Memo, InfoFilled, Upload } from '@element-plus/icons-vue'
-import type { NovelMaterials } from '@/api/novelWriter'
+import type { NovelMaterials, NovelStyleTemplate } from '@/api/novelWriter'
 
 const props = defineProps<{
   modelValue: NovelMaterials
   saving: boolean
   styleLoading: boolean
   outlineLoading: boolean
+  pipelineLoading: boolean
+  pipelineLabel?: string
+  styleTemplates: NovelStyleTemplate[]
 }>()
 
 const emit = defineEmits<{
@@ -94,11 +124,13 @@ const emit = defineEmits<{
   save: []
   outline: []
   style: []
+  pipeline: []
 }>()
 
 const form = reactive<NovelMaterials>({ ...props.modelValue })
 const referenceDialogVisible = shallowRef(false)
 const referenceDraft = shallowRef('')
+const selectedTemplateId = shallowRef('')
 const hasReference = computed(() => Boolean(form.reference_raw.trim()))
 
 watch(
@@ -115,6 +147,7 @@ watch(
 
 const openReferenceDialog = () => {
   referenceDraft.value = form.reference_raw || ''
+  selectedTemplateId.value = ''
   referenceDialogVisible.value = true
 }
 
@@ -142,6 +175,13 @@ const handleReferenceFile = (event: Event) => {
   }
   reader.onerror = () => ElMessage.error('读取文件失败，请重试')
   reader.readAsText(file)
+}
+
+const applyStyleTemplate = (templateId: string) => {
+  const template = props.styleTemplates.find((item) => item.id === templateId)
+  if (!template) return
+  referenceDraft.value = template.content || ''
+  ElMessage.success(`已带入文风模版：${template.name}`)
 }
 
 defineExpose({
@@ -297,6 +337,14 @@ defineExpose({
   padding: 0 20px;
 }
 
+.pipeline-btn {
+  border-radius: 12px;
+  font-weight: 700;
+  height: 40px;
+  padding: 0 20px;
+  box-shadow: 0 8px 18px rgba(245, 158, 11, 0.18);
+}
+
 .dialog-tip {
   display: flex;
   align-items: center;
@@ -312,6 +360,37 @@ defineExpose({
 
 .upload-area {
   margin-bottom: 16px;
+}
+
+.template-picker {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.template-picker__label {
+  color: #475569;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.template-picker__select {
+  width: 100%;
+}
+
+.template-option {
+  display: grid;
+  gap: 2px;
+}
+
+.template-option strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.template-option span {
+  color: #64748b;
+  font-size: 12px;
 }
 
 .file-upload-trigger {

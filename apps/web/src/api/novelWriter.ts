@@ -4,6 +4,10 @@ const novelAIRequestConfig = {
   timeout: 120000
 }
 
+const novelLongAIRequestConfig = {
+  timeout: 300000
+}
+
 export interface NovelInfoCard {
   name: string
   description: string
@@ -86,6 +90,16 @@ export interface NovelAuditItem {
   suggestion: string
 }
 
+export interface NovelFullReviewIssue {
+  severity: string
+  dimension: string
+  chapter_id: string
+  chapter_title: string
+  title: string
+  detail: string
+  suggestion: string
+}
+
 export interface NovelAuditReport {
   total_score: number
   ai_flavor_score: number
@@ -94,6 +108,19 @@ export interface NovelAuditReport {
   style_score: number
   issues: NovelAuditItem[]
   revision_advice: string
+}
+
+export interface NovelFullReview {
+  total_score: number
+  coherence_score: number
+  logic_reasonability_score: number
+  character_consistency_score: number
+  trigger_reasonability_score: number
+  summary: string
+  issues: NovelFullReviewIssue[]
+  revision_advice: string
+  reviewed_at: string
+  applied_at: string
 }
 
 export interface NovelChapterVersion {
@@ -136,6 +163,48 @@ export interface NovelRuntimeTask {
   updated_at: string
 }
 
+export interface AIProviderModelConfig {
+  name: string
+  model: string
+  capability: string
+}
+
+export interface AIProviderGroupConfig {
+  name: string
+  api_key: string
+  base_url: string
+  models: AIProviderModelConfig[]
+}
+
+export interface AIProviderConfig {
+  name: string
+  api_key: string
+  base_url: string
+  model: string
+  capability: string
+}
+
+export interface NovelWriterAISettings {
+  deepseek_api_key: string
+  base_url: string
+  model: string
+  provider_groups: AIProviderGroupConfig[]
+  providers: AIProviderConfig[]
+}
+
+export interface NovelStyleTemplate {
+  id: string
+  name: string
+  description: string
+  content: string
+  updated_at: string
+}
+
+export interface NovelWriterSettings {
+  ai_config: NovelWriterAISettings
+  style_templates: NovelStyleTemplate[]
+}
+
 export interface NovelProject {
   id: string
   title: string
@@ -153,6 +222,7 @@ export interface NovelProject {
   style_profile: NovelStyleProfile
   chapters: NovelChapter[]
   memory: NovelMemory
+  full_review: NovelFullReview
 }
 
 export interface CreateNovelProjectPayload {
@@ -170,6 +240,19 @@ export function emptyNovelMaterials(): NovelMaterials {
     world_raw: '',
     conflict_raw: '',
     reference_raw: ''
+  }
+}
+
+export function emptyNovelWriterSettings(): NovelWriterSettings {
+  return {
+    ai_config: {
+      deepseek_api_key: '',
+      base_url: '',
+      model: '',
+      provider_groups: [],
+      providers: []
+    },
+    style_templates: []
   }
 }
 
@@ -212,11 +295,23 @@ export const novelWriterApi = {
   reviseChapter(projectId: string, chapterId: string) {
     return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/revise`, undefined, novelAIRequestConfig) as Promise<NovelProject>
   },
+  fullReviewProject(projectId: string) {
+    return request.post(`/novel-writer/projects/${projectId}/full-review`, undefined, novelLongAIRequestConfig) as Promise<NovelProject>
+  },
+  reviseProjectByFullReview(projectId: string) {
+    return request.post(`/novel-writer/projects/${projectId}/full-review/revise`, undefined, novelLongAIRequestConfig) as Promise<NovelProject>
+  },
   adoptChapterVersion(projectId: string, chapterId: string, versionId: string) {
     return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/versions/${versionId}/adopt`) as Promise<NovelProject>
   },
   approveChapter(projectId: string, chapterId: string) {
     return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/approve`) as Promise<NovelProject>
+  },
+  getSettings() {
+    return request.get('/novel-writer/settings') as Promise<NovelWriterSettings>
+  },
+  updateSettings(payload: NovelWriterSettings) {
+    return request.put('/novel-writer/settings', payload) as Promise<NovelWriterSettings>
   },
   listRuntimeTasks() {
     return request.get('/novel-writer/tasks') as Promise<NovelRuntimeTask[]>

@@ -8,16 +8,21 @@ import NovelMaterialPanel from '@/components/NovelWriter/NovelMaterialPanel.vue'
 import NovelStructurePanel from '@/components/NovelWriter/NovelStructurePanel.vue'
 import NovelChapterPanel from '@/components/NovelWriter/NovelChapterPanel.vue'
 import NovelAuditPanel from '@/components/NovelWriter/NovelAuditPanel.vue'
+import NovelFullReviewPanel from '@/components/NovelWriter/NovelFullReviewPanel.vue'
+import NovelWriterSettingsDialog from '@/components/NovelWriter/NovelWriterSettingsDialog.vue'
 import NovelTaskMonitorFloat from '@/components/NovelWriter/NovelTaskMonitorFloat.vue'
 import {
   emptyNovelMaterials,
+  emptyNovelWriterSettings,
   novelWriterApi,
   type CreateNovelProjectPayload,
   type NovelExtractedInfo,
+  type NovelFullReview,
   type NovelMaterials,
   type NovelOutline,
   type NovelRuntimeTask,
   type NovelStyleProfile,
+  type NovelWriterSettings,
   type NovelProject
 } from '@/api/novelWriter'
 
@@ -27,9 +32,12 @@ const selectedOutlineId = shallowRef('')
 const selectedChapterId = shallowRef('')
 const loading = shallowRef(false)
 const saving = shallowRef(false)
+const settingsLoading = shallowRef(false)
+const settingsSaving = shallowRef(false)
 const running = shallowRef(false)
-type WriterActionKey = '' | 'extract' | 'outline' | 'style' | 'generate' | 'audit' | 'revise' | 'adopt' | 'manualEdit' | 'approve' | 'bulkGenerate' | 'bulkAudit'
+type WriterActionKey = '' | 'extract' | 'outline' | 'style' | 'generate' | 'audit' | 'revise' | 'adopt' | 'manualEdit' | 'approve' | 'bulkGenerate' | 'bulkAudit' | 'bulkRevise' | 'fullReview' | 'fullReviewRevise'
 const createDialogVisible = shallowRef(false)
+const settingsDialogVisible = shallowRef(false)
 const activeStep = shallowRef<'materials' | 'generation'>('materials')
 const insightsOpen = shallowRef(false)
 const generationVisited = shallowRef(false)
@@ -48,6 +56,12 @@ const runtimeTasksLoading = shallowRef(false)
 const runtimeTaskCancelId = shallowRef('')
 const runtimeTaskTimer = shallowRef<number | undefined>()
 const runtimeTasksHydrated = shallowRef(false)
+const bulkGenerateProgress = reactive({ current: 0, total: 0 })
+const bulkAuditProgress = reactive({ current: 0, total: 0 })
+const bulkReviseProgress = reactive({ current: 0, total: 0 })
+const pipelineLoading = shallowRef(false)
+const pipelineLabel = shallowRef('AI一条龙')
+const writerSettings = shallowRef<NovelWriterSettings>(emptyNovelWriterSettings())
 
 const workspaceSwitchItemClass = (step: 'materials' | 'generation') => [
   'workspace-switch__item',
@@ -85,6 +99,21 @@ const selectedAudit = computed(() => {
   }
 })
 
+const emptyFullReview = (): NovelFullReview => ({
+  total_score: 0,
+  coherence_score: 0,
+  logic_reasonability_score: 0,
+  character_consistency_score: 0,
+  trigger_reasonability_score: 0,
+  summary: '',
+  issues: [],
+  revision_advice: '',
+  reviewed_at: '',
+  applied_at: ''
+})
+
+const selectedFullReview = computed(() => selectedProject.value?.full_review || emptyFullReview())
+
 const hasLocalEditing = computed(() => chapterPanelEditing.value || materialMapEditing.value)
 
 const hasAuditResult = computed(() => {
@@ -99,6 +128,11 @@ const hasAuditResult = computed(() => {
     || audit.style_score
   )
 })
+
+const fullReviewNeedsRevision = (review?: NovelFullReview | null) => Boolean(
+  review?.issues?.length
+  || review?.revision_advice?.trim()
+)
 
 const chapterHasContent = (chapter?: NovelProject['chapters'][number] | null) => {
   if (!chapter) return false
@@ -119,6 +153,47 @@ const chapterHasAuditResult = (chapter?: NovelProject['chapters'][number] | null
     || audit.logic_score
     || audit.style_score
   )
+}
+
+const chapterHasRevisionVersion = (chapter?: NovelProject['chapters'][number] | null) => {
+  if (!chapter) return false
+  return Boolean(chapter.versions?.some((version) => version.type === 'revision' && version.content?.trim()))
+}
+
+const hasExtractedInfoData = (project: NovelProject) => Boolean(
+  project.extracted?.characters?.length
+  || project.extracted?.world_rules?.length
+  || project.extracted?.conflicts?.length
+  || project.extracted?.key_events?.length
+)
+
+const hasStyleProfileData = (project: NovelProject) => Boolean(
+  project.style_profile?.summary
+  || project.style_profile?.narration
+  || project.style_profile?.sentence
+  || project.style_profile?.dialogue
+  || project.style_profile?.rhythm
+  || project.style_profile?.do_rules?.length
+  || project.style_profile?.avoid_rules?.length
+)
+
+const latestRevisionVersionId = (chapter?: NovelProject['chapters'][number] | null) => {
+  if (!chapter) return ''
+  const revisions = (chapter.versions || []).filter((version) => version.type === 'revision' && version.content?.trim())
+  return revisions[revisions.length - 1]?.id || ''
+}
+
+const retryAsync = async <T>(action: () => Promise<T>, maxAttempts = 3) => {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await action()
+    } catch (error) {
+      lastError = error
+      if (attempt >= maxAttempts) break
+    }
+  }
+  throw lastError
 }
 
 const currentMaterials = computed({
@@ -221,6 +296,8 @@ const displayStyleProfile = computed<NovelStyleProfile>(() => {
   }
 })
 
+const styleTemplates = computed(() => writerSettings.value.style_templates || [])
+
 const getErrorMessage = (error: unknown) => {
   if (error && typeof error === 'object' && 'customMessage' in error) {
     return String((error as { customMessage?: unknown }).customMessage || error)
@@ -302,6 +379,35 @@ const fetchRuntimeTasks = async (silent = false) => {
   } finally {
     if (!silent) runtimeTasksLoading.value = false
   }
+}
+
+const loadWriterSettings = async (silent = false) => {
+  if (!silent) settingsLoading.value = true
+  try {
+    writerSettings.value = await novelWriterApi.getSettings()
+  } catch (error) {
+    if (!silent) ElMessage.error(`加载创作设置失败：${getErrorMessage(error)}`)
+  } finally {
+    if (!silent) settingsLoading.value = false
+  }
+}
+
+const saveWriterSettings = async (payload: NovelWriterSettings) => {
+  settingsSaving.value = true
+  try {
+    writerSettings.value = await novelWriterApi.updateSettings(payload)
+    settingsDialogVisible.value = false
+    ElMessage.success('创作设置已保存')
+  } catch (error) {
+    ElMessage.error(`保存创作设置失败：${getErrorMessage(error)}`)
+  } finally {
+    settingsSaving.value = false
+  }
+}
+
+const openWriterSettingsDialog = async () => {
+  settingsDialogVisible.value = true
+  await loadWriterSettings()
 }
 
 const startRuntimeTaskPolling = () => {
@@ -539,6 +645,29 @@ const analyzeStyle = () => runProjectAction('style', '文风画像', async () =>
   return novelWriterApi.analyzeStyle(selectedProject.value!.id)
 })
 
+const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
+
+const waitForOutlineReady = async (projectId: string, timeoutMs = 15 * 60 * 1000) => {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    const project = normalizeStaleOutlineProject(await novelWriterApi.getProject(projectId))
+    syncSelectedProject(project)
+    const progress = outlineProgress(project.outline)
+    if (project.outline?.generation_status === 'failed') {
+      throw new Error(project.outline.generation_error || '大纲生成失败')
+    }
+    if (project.outline?.generation_status === 'cancelled') {
+      throw new Error(project.outline.generation_error || '大纲生成已终止')
+    }
+    if (project.outline?.generation_status !== 'generating' || progress.complete) {
+      return project
+    }
+    await fetchRuntimeTasks(true)
+    await wait(2000)
+  }
+  throw new Error('等待大纲生成完成超时，请稍后重试')
+}
+
 const switchToGeneration = async () => {
   await saveBeforeAIAction()
   activeStep.value = 'generation'
@@ -656,17 +785,56 @@ const saveManualChapterEdit = async (chapterId: string, content: string, version
   if (!project) syncSelectedProject(previousProject)
 }
 const approveChapter = (chapterId: string) => runProjectAction('approve', '章节确认', () => novelWriterApi.approveChapter(selectedProject.value!.id, chapterId), chapterId)
-
-const generateAllChapters = async () => {
+const reviewFullNovelQuality = async (managedByWorkflow = false) => {
   if (!selectedProject.value) return
-  if (!ensureActionAvailable('生成所有章节正文')) return
+  if (!managedByWorkflow && !ensureActionAvailable('全文质量核验')) return
+
+  if (!managedByWorkflow) {
+    return runProjectAction('fullReview', '全文质量核验', () => novelWriterApi.fullReviewProject(selectedProject.value!.id))
+  }
+
+  activeAction.value = 'fullReview'
+  activeActionTargetId.value = selectedProject.value.id
+  try {
+    const project = await novelWriterApi.fullReviewProject(selectedProject.value.id)
+    syncSelectedProject(project)
+    return project
+  } finally {
+    activeAction.value = ''
+    activeActionTargetId.value = ''
+  }
+}
+
+const reviseNovelByFullReview = async (managedByWorkflow = false) => {
+  if (!selectedProject.value) return
+  if (!managedByWorkflow && !ensureActionAvailable('按核验结果修订')) return
+
+  if (!managedByWorkflow) {
+    return runProjectAction('fullReviewRevise', '按核验结果修订', () => novelWriterApi.reviseProjectByFullReview(selectedProject.value!.id))
+  }
+
+  activeAction.value = 'fullReviewRevise'
+  activeActionTargetId.value = selectedProject.value.id
+  try {
+    const project = await novelWriterApi.reviseProjectByFullReview(selectedProject.value.id)
+    syncSelectedProject(project)
+    return project
+  } finally {
+    activeAction.value = ''
+    activeActionTargetId.value = ''
+  }
+}
+
+const generateAllChapters = async (managedByWorkflow = false) => {
+  if (!selectedProject.value) return
+  if (!managedByWorkflow && !ensureActionAvailable('生成所有章节正文')) return
 
   await saveBeforeAIAction()
   const latestProject = selectedProject.value
   const outlineChapters = latestProject.outline?.chapters || []
   if (!outlineChapters.length) {
-    ElMessage.warning('请先生成大纲/章节结构')
-    return
+    if (!managedByWorkflow) ElMessage.warning('请先生成大纲/章节结构')
+    return { successCount: 0, failedCount: 0, skipped: 0 }
   }
 
   const pendingOutlineIds = outlineChapters
@@ -677,40 +845,61 @@ const generateAllChapters = async () => {
     .map((outlineChapter) => outlineChapter.id)
 
   if (!pendingOutlineIds.length) {
-    ElMessage.info('没有需要生成正文的章节')
-    return
+    if (!managedByWorkflow) ElMessage.info('没有需要生成正文的章节')
+    return { successCount: 0, failedCount: 0, skipped: outlineChapters.length }
   }
 
-  running.value = true
-  runningActionLabel.value = '批量生成正文'
+  if (!managedByWorkflow) running.value = true
+  runningActionLabel.value = managedByWorkflow ? 'AI一条龙 · 生成正文' : '批量生成正文'
   activeAction.value = 'bulkGenerate'
   activeActionTargetId.value = ''
+  bulkGenerateProgress.current = 0
+  bulkGenerateProgress.total = pendingOutlineIds.length
 
   let successCount = 0
+  const failedOutlineIds: string[] = []
   try {
-    for (const outlineId of pendingOutlineIds) {
-      const project = await novelWriterApi.generateChapter(selectedProject.value!.id, outlineId)
-      syncSelectedProject(project)
-      successCount += 1
+    for (const [index, outlineId] of pendingOutlineIds.entries()) {
+      bulkGenerateProgress.current = index + 1
+      activeActionTargetId.value = outlineId
+      try {
+        const project = await retryAsync(
+          () => novelWriterApi.generateChapter(selectedProject.value!.id, outlineId),
+          3
+        )
+        syncSelectedProject(project)
+        successCount += 1
+      } catch (error) {
+        failedOutlineIds.push(outlineId)
+        console.error(`generate chapter failed for outline ${outlineId}`, error)
+      }
     }
-    ElMessage.success(`已生成 ${successCount} 章正文`)
-  } catch (error) {
-    ElMessage.error(`批量生成正文失败：${getErrorMessage(error)}`)
+    if (!failedOutlineIds.length) {
+      if (!managedByWorkflow) ElMessage.success(`已生成 ${successCount} 章正文`)
+    } else if (successCount > 0) {
+      if (!managedByWorkflow) ElMessage.warning(`已生成 ${successCount} 章正文，另有 ${failedOutlineIds.length} 章生成失败`)
+    } else {
+      if (!managedByWorkflow) ElMessage.error('批量生成正文失败：所有待生成章节都未成功')
+    }
+    return { successCount, failedCount: failedOutlineIds.length, skipped: outlineChapters.length - pendingOutlineIds.length }
   } finally {
-    running.value = false
-    runningActionLabel.value = ''
+    if (!managedByWorkflow) running.value = false
+    if (!managedByWorkflow) runningActionLabel.value = ''
     activeAction.value = ''
     activeActionTargetId.value = ''
+    bulkGenerateProgress.current = 0
+    bulkGenerateProgress.total = 0
   }
 }
 
-const auditAllChapters = async () => {
+const auditAllChapters = async (managedByWorkflow = false) => {
   if (!selectedProject.value) return
-  if (!ensureActionAvailable('审计所有正文')) return
+  if (!managedByWorkflow && !ensureActionAvailable('审计所有正文')) return
 
   const outlineOrder = new Map(
     (selectedProject.value.outline?.chapters || []).map((chapter, index) => [chapter.id, index])
   )
+  const allChapters = selectedProject.value.chapters || []
   const pendingChapterIds = [...(selectedProject.value.chapters || [])]
     .sort((left, right) => {
       const leftOrder = outlineOrder.get(left.outline_id) ?? Number.MAX_SAFE_INTEGER
@@ -721,30 +910,265 @@ const auditAllChapters = async () => {
     .map((chapter) => chapter.id)
 
   if (!pendingChapterIds.length) {
-    ElMessage.info('没有需要审计的正文')
-    return
+    if (!managedByWorkflow) ElMessage.info('没有需要审计的正文')
+    return { successCount: 0, failedCount: 0, skipped: allChapters.length }
   }
 
-  running.value = true
-  runningActionLabel.value = '批量审计正文'
+  if (!managedByWorkflow) running.value = true
+  runningActionLabel.value = managedByWorkflow ? 'AI一条龙 · 审计正文' : '批量审计正文'
   activeAction.value = 'bulkAudit'
   activeActionTargetId.value = ''
+  bulkAuditProgress.current = 0
+  bulkAuditProgress.total = pendingChapterIds.length
 
   let successCount = 0
+  const failedChapterIds: string[] = []
   try {
-    for (const chapterId of pendingChapterIds) {
-      const project = await novelWriterApi.auditChapter(selectedProject.value!.id, chapterId)
-      syncSelectedProject(project)
-      successCount += 1
+    for (const [index, chapterId] of pendingChapterIds.entries()) {
+      bulkAuditProgress.current = index + 1
+      activeActionTargetId.value = chapterId
+      try {
+        const project = await retryAsync(
+          () => novelWriterApi.auditChapter(selectedProject.value!.id, chapterId),
+          3
+        )
+        syncSelectedProject(project)
+        successCount += 1
+      } catch (error) {
+        failedChapterIds.push(chapterId)
+        console.error(`audit chapter failed for chapter ${chapterId}`, error)
+      }
     }
-    ElMessage.success(`已审计 ${successCount} 章正文`)
+    if (!failedChapterIds.length) {
+      if (!managedByWorkflow) ElMessage.success(`已审计 ${successCount} 章正文`)
+    } else if (successCount > 0) {
+      if (!managedByWorkflow) ElMessage.warning(`已审计 ${successCount} 章正文，另有 ${failedChapterIds.length} 章审计失败`)
+    } else {
+      if (!managedByWorkflow) ElMessage.error('批量审计正文失败：所有待审计章节都未成功')
+    }
+    return { successCount, failedCount: failedChapterIds.length, skipped: allChapters.length - pendingChapterIds.length }
+  } finally {
+    if (!managedByWorkflow) running.value = false
+    if (!managedByWorkflow) runningActionLabel.value = ''
+    activeAction.value = ''
+    activeActionTargetId.value = ''
+    bulkAuditProgress.current = 0
+    bulkAuditProgress.total = 0
+  }
+}
+
+const reviseAllChapters = async (managedByWorkflow = false) => {
+  if (!selectedProject.value) return
+  if (!managedByWorkflow && !ensureActionAvailable('按审计修订所有正文')) return
+
+  const outlineOrder = new Map(
+    (selectedProject.value.outline?.chapters || []).map((chapter, index) => [chapter.id, index])
+  )
+  const allChapters = selectedProject.value.chapters || []
+  const pendingChapterIds = [...(selectedProject.value.chapters || [])]
+    .sort((left, right) => {
+      const leftOrder = outlineOrder.get(left.outline_id) ?? Number.MAX_SAFE_INTEGER
+      const rightOrder = outlineOrder.get(right.outline_id) ?? Number.MAX_SAFE_INTEGER
+      return leftOrder - rightOrder
+    })
+    .filter((chapter) => chapterHasContent(chapter) && chapterHasAuditResult(chapter) && !chapterHasRevisionVersion(chapter))
+    .map((chapter) => chapter.id)
+
+  if (!pendingChapterIds.length) {
+    if (!managedByWorkflow) ElMessage.info('没有需要按审计修订的正文')
+    return { successCount: 0, failedCount: 0, skipped: allChapters.length }
+  }
+
+  if (!managedByWorkflow) running.value = true
+  runningActionLabel.value = managedByWorkflow ? 'AI一条龙 · 修订正文' : '批量审计修订正文'
+  activeAction.value = 'bulkRevise'
+  activeActionTargetId.value = ''
+  bulkReviseProgress.current = 0
+  bulkReviseProgress.total = pendingChapterIds.length
+
+  let successCount = 0
+  const failedChapterIds: string[] = []
+  try {
+    for (const [index, chapterId] of pendingChapterIds.entries()) {
+      bulkReviseProgress.current = index + 1
+      activeActionTargetId.value = chapterId
+      try {
+        const project = await retryAsync(
+          () => novelWriterApi.reviseChapter(selectedProject.value!.id, chapterId),
+          3
+        )
+        syncSelectedProject(project)
+        successCount += 1
+      } catch (error) {
+        failedChapterIds.push(chapterId)
+        console.error(`revise chapter failed for chapter ${chapterId}`, error)
+      }
+    }
+    if (!failedChapterIds.length) {
+      if (!managedByWorkflow) ElMessage.success(`已修订 ${successCount} 章正文`)
+    } else if (successCount > 0) {
+      if (!managedByWorkflow) ElMessage.warning(`已修订 ${successCount} 章正文，另有 ${failedChapterIds.length} 章修订失败`)
+    } else {
+      if (!managedByWorkflow) ElMessage.error('批量审计修订失败：所有待修订章节都未成功')
+    }
+    return { successCount, failedCount: failedChapterIds.length, skipped: allChapters.length - pendingChapterIds.length }
+  } finally {
+    if (!managedByWorkflow) running.value = false
+    if (!managedByWorkflow) runningActionLabel.value = ''
+    activeAction.value = ''
+    activeActionTargetId.value = ''
+    bulkReviseProgress.current = 0
+    bulkReviseProgress.total = 0
+  }
+}
+
+const adoptAllRevisionVersions = async () => {
+  if (!selectedProject.value) return { adoptedCount: 0, failedCount: 0 }
+  const outlineOrder = new Map(
+    (selectedProject.value.outline?.chapters || []).map((chapter, index) => [chapter.id, index])
+  )
+  const targetChapters = [...(selectedProject.value.chapters || [])]
+    .sort((left, right) => {
+      const leftOrder = outlineOrder.get(left.outline_id) ?? Number.MAX_SAFE_INTEGER
+      const rightOrder = outlineOrder.get(right.outline_id) ?? Number.MAX_SAFE_INTEGER
+      return leftOrder - rightOrder
+    })
+    .filter((chapter) => {
+      const revisionVersionId = latestRevisionVersionId(chapter)
+      return Boolean(revisionVersionId) && chapter.active_version_id !== revisionVersionId
+    })
+
+  let adoptedCount = 0
+  let failedCount = 0
+  for (const chapter of targetChapters) {
+    const revisionVersionId = latestRevisionVersionId(chapter)
+    if (!revisionVersionId) continue
+    try {
+      const project = await retryAsync(
+        () => novelWriterApi.adoptChapterVersion(selectedProject.value!.id, chapter.id, revisionVersionId),
+        3
+      )
+      syncSelectedProject(project)
+      adoptedCount += 1
+    } catch (error) {
+      failedCount += 1
+      console.error(`adopt revision failed for chapter ${chapter.id}`, error)
+    }
+  }
+  return { adoptedCount, failedCount }
+}
+
+const approveAllChapters = async () => {
+  if (!selectedProject.value) return { approvedCount: 0, failedCount: 0 }
+  const outlineOrder = new Map(
+    (selectedProject.value.outline?.chapters || []).map((chapter, index) => [chapter.id, index])
+  )
+  const targetChapterIds = [...(selectedProject.value.chapters || [])]
+    .sort((left, right) => {
+      const leftOrder = outlineOrder.get(left.outline_id) ?? Number.MAX_SAFE_INTEGER
+      const rightOrder = outlineOrder.get(right.outline_id) ?? Number.MAX_SAFE_INTEGER
+      return leftOrder - rightOrder
+    })
+    .filter((chapter) => chapterHasContent(chapter) && chapter.status !== 'approved')
+    .map((chapter) => chapter.id)
+
+  let approvedCount = 0
+  let failedCount = 0
+  for (const chapterId of targetChapterIds) {
+    try {
+      const project = await retryAsync(
+        () => novelWriterApi.approveChapter(selectedProject.value!.id, chapterId),
+        3
+      )
+      syncSelectedProject(project)
+      approvedCount += 1
+    } catch (error) {
+      failedCount += 1
+      console.error(`approve chapter failed for chapter ${chapterId}`, error)
+    }
+  }
+  return { approvedCount, failedCount }
+}
+
+const runAiPipeline = async () => {
+  if (!selectedProject.value) return
+  if (!ensureActionAvailable('AI一条龙')) return
+
+  running.value = true
+  pipelineLoading.value = true
+  pipelineLabel.value = 'AI一条龙 · 准备中'
+  runningActionLabel.value = 'AI一条龙'
+  activeAction.value = ''
+  activeActionTargetId.value = ''
+
+  try {
+    await saveBeforeAIAction()
+    await fetchRuntimeTasks(true)
+
+    if (!selectedProject.value) throw new Error('请先选择小说项目')
+
+    if (!hasExtractedInfoData(selectedProject.value)) {
+      pipelineLabel.value = 'AI一条龙 · 信息提取'
+      activeAction.value = 'extract'
+      syncSelectedProject(await novelWriterApi.extractInfo(selectedProject.value.id))
+    }
+
+    if (!hasStyleProfileData(selectedProject.value)) {
+      pipelineLabel.value = 'AI一条龙 · 文风画像'
+      activeAction.value = 'style'
+      syncSelectedProject(await novelWriterApi.analyzeStyle(selectedProject.value.id))
+    }
+
+    pipelineLabel.value = 'AI一条龙 · 生成大纲'
+    activeAction.value = 'outline'
+    const outlinedProject = await novelWriterApi.planOutline(selectedProject.value.id)
+    syncSelectedProject(outlinedProject)
+    if (outlinedProject.outline?.generation_status === 'generating') {
+      startOutlinePolling(outlinedProject.id)
+      pipelineLabel.value = 'AI一条龙 · 等待大纲完成'
+      await waitForOutlineReady(outlinedProject.id)
+    }
+
+    pipelineLabel.value = 'AI一条龙 · 生成正文'
+    await generateAllChapters(true)
+
+    pipelineLabel.value = 'AI一条龙 · 审计正文'
+    await auditAllChapters(true)
+
+    pipelineLabel.value = 'AI一条龙 · 修订正文'
+    await reviseAllChapters(true)
+
+    pipelineLabel.value = 'AI一条龙 · 采用修订版'
+    const adoptSummary = await adoptAllRevisionVersions()
+    if (adoptSummary.failedCount > 0) {
+      ElMessage.warning(`修订版采用完成 ${adoptSummary.adoptedCount} 章，另有 ${adoptSummary.failedCount} 章采用失败`)
+    }
+
+    pipelineLabel.value = 'AI一条龙 · 全文核验'
+    const reviewedProject = await reviewFullNovelQuality(true)
+
+    if (fullReviewNeedsRevision(reviewedProject?.full_review)) {
+      pipelineLabel.value = 'AI一条龙 · 全文修订'
+      await reviseNovelByFullReview(true)
+    }
+
+    pipelineLabel.value = 'AI一条龙 · 确认章节'
+    const approveSummary = await approveAllChapters()
+    if (approveSummary.failedCount > 0) {
+      ElMessage.warning(`章节确认完成 ${approveSummary.approvedCount} 章，另有 ${approveSummary.failedCount} 章确认失败`)
+    }
+
+    pipelineLabel.value = 'AI一条龙 · 已完成'
+    ElMessage.success('AI一条龙工作流已执行完成')
   } catch (error) {
-    ElMessage.error(`批量审计正文失败：${getErrorMessage(error)}`)
+    ElMessage.error(`AI一条龙执行失败：${getErrorMessage(error)}`)
   } finally {
     running.value = false
     runningActionLabel.value = ''
     activeAction.value = ''
     activeActionTargetId.value = ''
+    pipelineLoading.value = false
+    pipelineLabel.value = 'AI一条龙'
   }
 }
 
@@ -790,6 +1214,7 @@ const deleteProject = async (project: NovelProject) => {
 }
 
 onMounted(refreshProjects)
+onMounted(() => loadWriterSettings(true))
 onMounted(startRuntimeTaskPolling)
 onBeforeUnmount(stopOutlinePolling)
 onBeforeUnmount(stopRuntimeTaskPolling)
@@ -804,6 +1229,7 @@ onBeforeUnmount(stopRuntimeTaskPolling)
         selected-id=""
         :loading="loading"
         @select="selectProject"
+        @settings="openWriterSettingsDialog"
         @create="createDialogVisible = true"
         @export="exportProjectMarkdown"
         @delete="deleteProject"
@@ -874,9 +1300,13 @@ onBeforeUnmount(stopRuntimeTaskPolling)
             :saving="saving"
             :style-loading="isActionLoading('style')"
             :outline-loading="isActionLoading('outline')"
+            :pipeline-loading="pipelineLoading"
+            :pipeline-label="pipelineLabel"
+            :style-templates="styleTemplates"
             @save="saveCurrentProject"
             @outline="planOutline"
             @style="analyzeStyle"
+            @pipeline="runAiPipeline"
           />
 
           <NovelStructurePanel
@@ -897,10 +1327,18 @@ onBeforeUnmount(stopRuntimeTaskPolling)
               :chapters="selectedProject.chapters || []"
               :selected-chapter-id="selectedChapterId"
               :running="running"
-              :generate-loading-outline-id="isActionLoading('generate') ? activeActionTargetId : ''"
-              :audit-loading-chapter-id="isActionLoading('audit') ? activeActionTargetId : ''"
+              :generate-loading-outline-id="(isActionLoading('generate') || isActionLoading('bulkGenerate')) ? activeActionTargetId : ''"
+              :audit-loading-chapter-id="(isActionLoading('audit') || isActionLoading('bulkAudit')) ? activeActionTargetId : ''"
               :bulk-generate-loading="isActionLoading('bulkGenerate')"
               :bulk-audit-loading="isActionLoading('bulkAudit')"
+              :bulk-revise-loading="isActionLoading('bulkRevise')"
+              :full-review-loading="isActionLoading('fullReview')"
+              :bulk-generate-progress-current="bulkGenerateProgress.current"
+              :bulk-generate-progress-total="bulkGenerateProgress.total"
+              :bulk-audit-progress-current="bulkAuditProgress.current"
+              :bulk-audit-progress-total="bulkAuditProgress.total"
+              :bulk-revise-progress-current="bulkReviseProgress.current"
+              :bulk-revise-progress-total="bulkReviseProgress.total"
               :adopt-loading-version-id="isActionLoading('adopt') ? activeActionTargetId : ''"
               :manual-save-loading="isActionLoading('manualEdit', selectedChapter?.id || '')"
               :approve-loading-chapter-id="isActionLoading('approve') ? activeActionTargetId : ''"
@@ -910,6 +1348,8 @@ onBeforeUnmount(stopRuntimeTaskPolling)
               @audit="auditChapter"
               @bulk-generate="generateAllChapters"
               @bulk-audit="auditAllChapters"
+              @bulk-revise="reviseAllChapters"
+              @full-review="reviewFullNovelQuality"
               @revise="reviseChapter"
               @adopt="adoptChapterVersion"
               @manual-save="saveManualChapterEdit"
@@ -920,12 +1360,20 @@ onBeforeUnmount(stopRuntimeTaskPolling)
             <aside class="generation-audit-column">
               <NovelAuditPanel
                 :audit="selectedAudit"
-                :revise-loading="isActionLoading('revise', selectedChapter?.id || '')"
+                :revise-loading="isActionLoading('revise', selectedChapter?.id || '') || isActionLoading('bulkRevise', selectedChapter?.id || '')"
                 :show-revise-action="hasAuditResult"
                 @revise="selectedChapter?.id && reviseChapter(selectedChapter.id)"
               />
             </aside>
           </div>
+
+          <NovelFullReviewPanel
+            class="generation-full-review"
+            :review="selectedFullReview"
+            :loading="isActionLoading('fullReviewRevise')"
+            :show-revise-action="fullReviewNeedsRevision(selectedFullReview)"
+            @revise="reviseNovelByFullReview"
+          />
         </div>
       </template>
     </main>
@@ -952,6 +1400,14 @@ onBeforeUnmount(stopRuntimeTaskPolling)
         <el-button type="primary" :loading="saving" @click="createProject">创建</el-button>
       </template>
     </el-dialog>
+
+    <NovelWriterSettingsDialog
+      v-model="settingsDialogVisible"
+      :settings="writerSettings"
+      :loading="settingsLoading"
+      :saving="settingsSaving"
+      @save="saveWriterSettings"
+    />
 
     <NovelTaskMonitorFloat
       :tasks="runtimeTasks"
@@ -1020,6 +1476,10 @@ onBeforeUnmount(stopRuntimeTaskPolling)
   min-width: 0;
   width: 100%;
   overflow: hidden;
+}
+
+.generation-full-review {
+  width: 100%;
 }
 
 .workspace-switch {

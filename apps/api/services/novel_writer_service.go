@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -36,6 +37,7 @@ type NovelProject struct {
 	StyleProfile   NovelStyleProfile  `json:"style_profile"`
 	Chapters       []NovelChapter     `json:"chapters"`
 	Memory         NovelMemory        `json:"memory"`
+	FullReview     NovelFullReview    `json:"full_review"`
 }
 
 type NovelMaterials struct {
@@ -152,6 +154,29 @@ type NovelAuditItem struct {
 	Suggestion string `json:"suggestion"`
 }
 
+type NovelFullReview struct {
+	TotalScore                int                    `json:"total_score"`
+	CoherenceScore            int                    `json:"coherence_score"`
+	LogicReasonabilityScore   int                    `json:"logic_reasonability_score"`
+	CharacterConsistencyScore int                    `json:"character_consistency_score"`
+	TriggerReasonabilityScore int                    `json:"trigger_reasonability_score"`
+	Summary                   string                 `json:"summary"`
+	Issues                    []NovelFullReviewIssue `json:"issues"`
+	RevisionAdvice            string                 `json:"revision_advice"`
+	ReviewedAt                string                 `json:"reviewed_at"`
+	AppliedAt                 string                 `json:"applied_at"`
+}
+
+type NovelFullReviewIssue struct {
+	Severity     string `json:"severity"`
+	Dimension    string `json:"dimension"`
+	ChapterID    string `json:"chapter_id"`
+	ChapterTitle string `json:"chapter_title"`
+	Title        string `json:"title"`
+	Detail       string `json:"detail"`
+	Suggestion   string `json:"suggestion"`
+}
+
 type NovelMemory struct {
 	ChapterSummaries []NovelInfoCard `json:"chapter_summaries"`
 	CharacterStates  []NovelInfoCard `json:"character_states"`
@@ -192,6 +217,7 @@ func init() {
 			{Column: "style_profile", Field: "style_profile", JSON: true},
 			{Column: "chapters", Field: "chapters", JSON: true},
 			{Column: "memory", Field: "memory", JSON: true},
+			{Column: "full_review", Field: "full_review", JSON: true},
 		},
 	}
 }
@@ -223,10 +249,36 @@ func EnsureNovelWriterTables() error {
 			style_profile JSON NULL,
 			chapters JSON NULL,
 			memory JSON NULL,
+			full_review JSON NULL,
 			raw_json JSON NOT NULL,
 			migrated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)
 	`)
+	if err != nil {
+		return err
+	}
+
+	return ensureNovelProjectsFullReviewColumn(ctx, db)
+}
+
+func ensureNovelProjectsFullReviewColumn(ctx context.Context, db *sql.DB) error {
+	var columnName string
+	err := db.QueryRowContext(ctx, `
+		SELECT COLUMN_NAME
+		FROM INFORMATION_SCHEMA.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE()
+			AND TABLE_NAME = 'novel_projects'
+			AND COLUMN_NAME = 'full_review'
+		LIMIT 1
+	`).Scan(&columnName)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+
+	_, err = db.ExecContext(ctx, "ALTER TABLE novel_projects ADD COLUMN full_review JSON NULL AFTER memory")
 	return err
 }
 
@@ -246,6 +298,7 @@ func RegisterNovelWriterRoutes(api *gin.RouterGroup) {
 		c.Next()
 	})
 
+	RegisterNovelWriterSettingsRoutes(novels)
 	novels.GET("/projects", ListNovelProjectsHandler)
 	novels.POST("/projects", CreateNovelProjectHandler)
 	novels.GET("/projects/:id", GetNovelProjectHandler)
@@ -260,6 +313,8 @@ func RegisterNovelWriterRoutes(api *gin.RouterGroup) {
 	novels.POST("/projects/:id/chapters/:chapterId/revise", ReviseNovelChapterHandler)
 	novels.POST("/projects/:id/chapters/:chapterId/versions/:versionId/adopt", AdoptNovelChapterVersionHandler)
 	novels.POST("/projects/:id/chapters/:chapterId/approve", ApproveNovelChapterHandler)
+	novels.POST("/projects/:id/full-review", ReviewNovelFullQualityHandler)
+	novels.POST("/projects/:id/full-review/revise", ReviseNovelByFullReviewHandler)
 	novels.GET("/tasks", ListNovelRuntimeTasksHandler)
 	novels.POST("/tasks/:taskId/cancel", CancelNovelRuntimeTaskHandler)
 }
@@ -370,8 +425,13 @@ func UpdateNovelProjectHandler(c *gin.Context) {
 	}
 	project.Outline = req.Outline
 	project.StyleProfile = req.StyleProfile
+	chaptersChanged := mustJSON(project.Chapters) != mustJSON(req.Chapters)
 	project.Chapters = req.Chapters
 	project.Memory = req.Memory
+	project.FullReview = req.FullReview
+	if chaptersChanged {
+		clearNovelFullReview(&project)
+	}
 	project.Status = firstNonEmpty(strings.TrimSpace(req.Status), project.Status)
 	project.CurrentStage = firstNonEmpty(strings.TrimSpace(req.CurrentStage), project.CurrentStage)
 	project.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
@@ -428,6 +488,63 @@ func normalizeNovelAuditReport(report *NovelAuditReport) {
 	if report.TotalScore == 0 {
 		report.TotalScore = clampNovelAuditScore((report.AIFlavorScore + report.CharacterScore + report.LogicScore + report.StyleScore + 2) / 4)
 	}
+}
+
+func normalizeNovelFullReviewReport(report *NovelFullReview) {
+	values := []int{
+		report.TotalScore,
+		report.CoherenceScore,
+		report.LogicReasonabilityScore,
+		report.CharacterConsistencyScore,
+		report.TriggerReasonabilityScore,
+	}
+	maxScore := 0
+	for _, value := range values {
+		if value > maxScore {
+			maxScore = value
+		}
+	}
+	legacyTenScale := maxScore > 0 && maxScore <= 10
+	scale := 1
+	if legacyTenScale {
+		scale = 10
+	}
+
+	report.TotalScore = clampNovelAuditScore(report.TotalScore * scale)
+	report.CoherenceScore = clampNovelAuditScore(report.CoherenceScore * scale)
+	report.LogicReasonabilityScore = clampNovelAuditScore(report.LogicReasonabilityScore * scale)
+	report.CharacterConsistencyScore = clampNovelAuditScore(report.CharacterConsistencyScore * scale)
+	report.TriggerReasonabilityScore = clampNovelAuditScore(report.TriggerReasonabilityScore * scale)
+
+	if report.TotalScore == 0 {
+		report.TotalScore = clampNovelAuditScore((report.CoherenceScore + report.LogicReasonabilityScore + report.CharacterConsistencyScore + report.TriggerReasonabilityScore + 2) / 4)
+	}
+
+	for index := range report.Issues {
+		report.Issues[index].Severity = normalizeNovelSeverity(report.Issues[index].Severity)
+		report.Issues[index].Dimension = strings.TrimSpace(report.Issues[index].Dimension)
+		report.Issues[index].ChapterID = strings.TrimSpace(report.Issues[index].ChapterID)
+		report.Issues[index].ChapterTitle = strings.TrimSpace(report.Issues[index].ChapterTitle)
+		report.Issues[index].Title = strings.TrimSpace(report.Issues[index].Title)
+		report.Issues[index].Detail = strings.TrimSpace(report.Issues[index].Detail)
+		report.Issues[index].Suggestion = strings.TrimSpace(report.Issues[index].Suggestion)
+	}
+}
+
+func normalizeNovelSeverity(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "high", "medium", "low":
+		return strings.ToLower(strings.TrimSpace(value))
+	default:
+		return "medium"
+	}
+}
+
+func clearNovelFullReview(project *NovelProject) {
+	if project == nil {
+		return
+	}
+	project.FullReview = NovelFullReview{}
 }
 
 func DeleteNovelProjectHandler(c *gin.Context) {
@@ -533,6 +650,7 @@ func PlanNovelOutlineHandler(c *gin.Context) {
 	// audits, and memory derived from the previous outline must be discarded.
 	project.Chapters = []NovelChapter{}
 	project.Memory = NovelMemory{}
+	clearNovelFullReview(&project)
 	project.CurrentStage = "outline_ready"
 	project.UpdatedAt = time.Now().Format("2006-01-02 15:04:05")
 	if err := saveNovelProject(project); err != nil {
@@ -563,7 +681,7 @@ func AnalyzeNovelStyleHandler(c *gin.Context) {
 	referenceText := strings.TrimSpace(project.Materials.ReferenceRaw)
 	referenceInstruction := "用户未提供文风参考文本。请结合小说题材、事实库和商业网文可读性，生成一套原创、自然、不带明显 AI 味的默认文风画像。"
 	if referenceText != "" {
-		referenceInstruction = fmt.Sprintf("参考文本：\n%s", truncateForAI(referenceText, 12000))
+		referenceInstruction = fmt.Sprintf("参考文本（若全文较长，已按开篇、中段、后段抽样）：\n%s", sampleTextForAI(referenceText, 12000))
 	}
 	user := fmt.Sprintf(`分析参考文本的整体文风，用于后续原创小说的抽象风格指导。
 输出 JSON schema:
@@ -664,6 +782,7 @@ func GenerateNovelChapterHandler(c *gin.Context) {
 	})
 	chapter.ActiveVersionID = chapter.Versions[len(chapter.Versions)-1].ID
 	project.Chapters = append(project.Chapters, chapter)
+	clearNovelFullReview(&project)
 	project.CurrentStage = "chapter_drafting"
 	project.UpdatedAt = now
 	if err := saveNovelProjectPreservingGeneratedOutline(project); err != nil {
@@ -787,6 +906,7 @@ func AdoptNovelChapterVersionHandler(c *gin.Context) {
 		chapter.ActiveVersionID = version.ID
 		chapter.UpdatedAt = now
 		project.Chapters[index] = chapter
+		clearNovelFullReview(&project)
 		project.UpdatedAt = now
 		if err := saveNovelProjectPreservingGeneratedOutline(project); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -818,11 +938,195 @@ func ApproveNovelChapterHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, project)
 }
 
+func ReviewNovelFullQualityHandler(c *gin.Context) {
+	project, err := getNovelProject(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	chapters, missingTitles := novelContentChaptersInOutlineOrder(project)
+	if len(chapters) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请先生成正文后再进行全文质量核验"})
+		return
+	}
+	if len(missingTitles) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("以下章节尚未生成正文，暂无法进行全文质量核验：%s", strings.Join(missingTitles, "、"))})
+		return
+	}
+
+	taskCtx, task := beginNovelRuntimeTask(project, "full_review", "全文质量核验")
+	defer task.finish()
+	chapterPayload := truncateForAI(mustJSON(buildNovelFullReviewPayload(chapters)), 220000)
+
+	system := "你是中文长篇小说总审校，负责从全本层面检查逻辑合理性、剧情连贯性、角色设定一致性、事件触发合理性。请只输出 JSON。"
+	user := fmt.Sprintf(`请对这部小说做全文质量核验，重点检查：
+1. 各章节之间的因果链是否完整，是否存在跳跃、断裂或前后矛盾。
+2. 人物动机、性格、能力、关系是否前后一致。
+3. 关键事件的触发是否自然，是否存在突兀推进、强行转折或设定失效。
+4. 全本是否存在伏笔遗失、世界观规则冲突、时间线问题、阶段推进失衡。
+
+评分要求：
+1. total_score、coherence_score、logic_reasonability_score、character_consistency_score、trigger_reasonability_score 全部使用 0-100 的整数。
+2. 分数越高表示质量越好。
+3. issues 按严重程度输出 high|medium|low。
+4. chapter_id / chapter_title 如果能定位到具体章节就填写，若是全局问题可留空。
+
+输出 JSON schema:
+{"total_score":0,"coherence_score":0,"logic_reasonability_score":0,"character_consistency_score":0,"trigger_reasonability_score":0,"summary":"","issues":[{"severity":"high|medium|low","dimension":"","chapter_id":"","chapter_title":"","title":"","detail":"","suggestion":""}],"revision_advice":""}
+
+小说标题：%s
+事实库：%s
+文风画像：%s
+全书大纲：%s
+章节正文：%s`, project.Title, mustJSON(project.Extracted), mustJSON(project.StyleProfile), mustJSON(project.Outline.Chapters), chapterPayload)
+
+	var report NovelFullReview
+	if err := callNovelAIJSONWithTimeoutContext(taskCtx, system, user, &report, 0, 240*time.Second); err != nil {
+		if isContextCanceledError(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": "全文质量核验任务已终止"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	now := time.Now().Format("2006-01-02 15:04:05")
+	normalizeNovelFullReviewReport(&report)
+	report.ReviewedAt = now
+	report.AppliedAt = ""
+	project.FullReview = report
+	project.CurrentStage = "full_reviewed"
+	project.UpdatedAt = now
+	if err := saveNovelProjectPreservingGeneratedOutline(project); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, project)
+}
+
+func ReviseNovelByFullReviewHandler(c *gin.Context) {
+	project, err := getNovelProject(c.Param("id"))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+	if project.FullReview.ReviewedAt == "" && len(project.FullReview.Issues) == 0 && strings.TrimSpace(project.FullReview.RevisionAdvice) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请先完成全文质量核验"})
+		return
+	}
+
+	chapters, missingTitles := novelContentChaptersInOutlineOrder(project)
+	if len(chapters) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请先生成正文后再进行全文修订"})
+		return
+	}
+	if len(missingTitles) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("以下章节尚未生成正文，暂无法进行全文修订：%s", strings.Join(missingTitles, "、"))})
+		return
+	}
+
+	taskCtx, task := beginNovelRuntimeTask(project, "full_review_revise", "按核验结果修订全文")
+	defer task.finish()
+	chapterPayload := truncateForAI(mustJSON(buildNovelFullReviewPayload(chapters)), 220000)
+
+	system := "你是中文长篇小说总编修订者。请严格按照全文核验意见修订小说全文，只输出 JSON。"
+	user := fmt.Sprintf(`请根据全文质量核验结果，对这部小说做全书级修订。
+要求：
+1. 仅修改确有必要的章节，尽量保留已有优点和原有文风。
+2. 输出 chapters 数组时，只返回实际需要改动的章节。
+3. chapter_id 必须与输入保持一致。
+4. content 输出修订后的完整章节正文，summary 输出修订后的章节摘要。
+
+输出 JSON schema:
+{"chapters":[{"chapter_id":"","title":"","content":"","summary":"","reason":""}]}
+
+全文核验结果：%s
+全书大纲：%s
+章节正文：%s`, mustJSON(project.FullReview), mustJSON(project.Outline.Chapters), chapterPayload)
+
+	var revised struct {
+		Chapters []struct {
+			ChapterID string `json:"chapter_id"`
+			Title     string `json:"title"`
+			Content   string `json:"content"`
+			Summary   string `json:"summary"`
+			Reason    string `json:"reason"`
+		} `json:"chapters"`
+	}
+	if err := callNovelAIJSONWithTimeoutContext(taskCtx, system, user, &revised, 0, 240*time.Second); err != nil {
+		if isContextCanceledError(err) {
+			c.JSON(http.StatusConflict, gin.H{"error": "全文修订任务已终止"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	now := time.Now().Format("2006-01-02 15:04:05")
+	revisedByID := map[string]struct {
+		Title   string
+		Content string
+		Summary string
+		Reason  string
+	}{}
+	for _, item := range revised.Chapters {
+		chapterID := strings.TrimSpace(item.ChapterID)
+		content := strings.TrimSpace(item.Content)
+		if chapterID == "" || content == "" {
+			continue
+		}
+		revisedByID[chapterID] = struct {
+			Title   string
+			Content string
+			Summary string
+			Reason  string
+		}{
+			Title:   strings.TrimSpace(item.Title),
+			Content: content,
+			Summary: strings.TrimSpace(item.Summary),
+			Reason:  strings.TrimSpace(item.Reason),
+		}
+	}
+
+	for index, chapter := range project.Chapters {
+		revisedChapter, ok := revisedByID[chapter.ID]
+		if !ok {
+			continue
+		}
+		version := NovelChapterVersion{
+			ID:        "VER-" + uuid.NewString(),
+			Type:      "revision",
+			Content:   revisedChapter.Content,
+			Reason:    firstNonEmpty(revisedChapter.Reason, "根据全文质量核验结果修订"),
+			CreatedAt: now,
+		}
+		chapter.Title = firstNonEmpty(revisedChapter.Title, chapter.Title)
+		chapter.Content = revisedChapter.Content
+		chapter.Summary = firstNonEmpty(revisedChapter.Summary, chapter.Summary)
+		chapter.Status = "draft"
+		chapter.Audit = NovelAuditReport{}
+		chapter.ActiveVersionID = version.ID
+		chapter.UpdatedAt = now
+		chapter.Versions = append(chapter.Versions, version)
+		project.Chapters[index] = chapter
+	}
+
+	project.FullReview.AppliedAt = now
+	project.CurrentStage = "full_review_revised"
+	project.UpdatedAt = now
+	if err := saveNovelProjectPreservingGeneratedOutline(project); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, project)
+}
+
 func listNovelProjects() ([]NovelProject, error) {
 	if err := EnsureNovelWriterTables(); err != nil {
 		return nil, err
 	}
-	projects, err := sqlListJSON[NovelProject]("novel_projects", "`migrated_at` DESC")
+	projects, err := sqlListJSON[NovelProject]("novel_projects", "")
 	if err != nil {
 		return nil, err
 	}
@@ -836,16 +1140,7 @@ func getNovelProject(id string) (NovelProject, error) {
 	if err := EnsureNovelWriterTables(); err != nil {
 		return NovelProject{}, err
 	}
-	projects, err := sqlListJSON[NovelProject]("novel_projects", "`migrated_at` DESC")
-	if err != nil {
-		return NovelProject{}, err
-	}
-	for _, project := range projects {
-		if project.ID == id {
-			return project, nil
-		}
-	}
-	return NovelProject{}, sql.ErrNoRows
+	return sqlGetJSONByID[NovelProject]("novel_projects", id)
 }
 
 func saveNovelProject(project NovelProject) error {
@@ -1249,6 +1544,58 @@ func previousNovelChapterContext(project NovelProject, outlineID string, limit i
 	return mustJSON(items)
 }
 
+type novelFullReviewChapterPayload struct {
+	ChapterID string `json:"chapter_id"`
+	OutlineID string `json:"outline_id"`
+	Title     string `json:"title"`
+	Summary   string `json:"summary"`
+	Content   string `json:"content"`
+}
+
+func novelContentChaptersInOutlineOrder(project NovelProject) ([]NovelChapter, []string) {
+	byOutlineID := make(map[string]NovelChapter, len(project.Chapters))
+	for _, chapter := range project.Chapters {
+		byOutlineID[chapter.OutlineID] = chapter
+	}
+
+	ordered := make([]NovelChapter, 0, len(project.Chapters))
+	missingTitles := make([]string, 0)
+	usedChapterIDs := map[string]bool{}
+
+	for _, outline := range project.Outline.Chapters {
+		chapter, ok := byOutlineID[outline.ID]
+		if !ok || strings.TrimSpace(chapter.Content) == "" {
+			missingTitles = append(missingTitles, firstNonEmpty(strings.TrimSpace(outline.Title), "未命名章节"))
+			continue
+		}
+		ordered = append(ordered, chapter)
+		usedChapterIDs[chapter.ID] = true
+	}
+
+	for _, chapter := range project.Chapters {
+		if usedChapterIDs[chapter.ID] || strings.TrimSpace(chapter.Content) == "" {
+			continue
+		}
+		ordered = append(ordered, chapter)
+	}
+
+	return ordered, missingTitles
+}
+
+func buildNovelFullReviewPayload(chapters []NovelChapter) []novelFullReviewChapterPayload {
+	result := make([]novelFullReviewChapterPayload, 0, len(chapters))
+	for _, chapter := range chapters {
+		result = append(result, novelFullReviewChapterPayload{
+			ChapterID: chapter.ID,
+			OutlineID: chapter.OutlineID,
+			Title:     chapter.Title,
+			Summary:   chapter.Summary,
+			Content:   chapter.Content,
+		})
+	}
+	return result
+}
+
 func callNovelAIJSON(systemPrompt string, userPrompt string, target any) error {
 	return callNovelAIJSONContext(context.Background(), systemPrompt, userPrompt, target)
 }
@@ -1261,13 +1608,16 @@ func callNovelAIJSONWithMaxTokens(systemPrompt string, userPrompt string, target
 	return callNovelAIJSONWithMaxTokensContext(context.Background(), systemPrompt, userPrompt, target, maxTokens)
 }
 
-func callNovelAIJSONWithMaxTokensContext(ctx context.Context, systemPrompt string, userPrompt string, target any, maxTokens int) error {
+func callNovelAIJSONWithTimeoutContext(ctx context.Context, systemPrompt string, userPrompt string, target any, maxTokens int, requestTimeout time.Duration) error {
 	provider, err := selectNovelProvider()
 	if err != nil {
 		return err
 	}
 	metrics := novelAIRequestMetrics(provider, systemPrompt, userPrompt, maxTokens)
-	ctx, cancel := context.WithTimeout(ctx, 110*time.Second)
+	if requestTimeout <= 0 {
+		requestTimeout = 110 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	clientConfig := openai.DefaultConfig(provider.APIKey)
 	clientConfig.BaseURL = provider.BaseURL
@@ -1294,6 +1644,10 @@ func callNovelAIJSONWithMaxTokensContext(ctx context.Context, systemPrompt strin
 		return fmt.Errorf("%w; %s; output_runes=%d", err, metrics, len([]rune(resp.Choices[0].Message.Content)))
 	}
 	return nil
+}
+
+func callNovelAIJSONWithMaxTokensContext(ctx context.Context, systemPrompt string, userPrompt string, target any, maxTokens int) error {
+	return callNovelAIJSONWithTimeoutContext(ctx, systemPrompt, userPrompt, target, maxTokens, 110*time.Second)
 }
 
 func isContextCanceledError(err error) bool {

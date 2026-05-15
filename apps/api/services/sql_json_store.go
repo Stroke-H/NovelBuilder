@@ -274,6 +274,39 @@ func SQLListJSONForFeishu[T any](tableName string, orderBy string) ([]T, error) 
 	return sqlListJSON[T](tableName, orderBy)
 }
 
+func sqlGetJSONByID[T any](tableName string, id any) (T, error) {
+	var zero T
+	table, ok := sqlJSONTables[tableName]
+	if !ok {
+		return zero, fmt.Errorf("sql json table not registered: %s", tableName)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	db, _, err := DatabaseManager.DB(ctx)
+	if err != nil {
+		return zero, err
+	}
+
+	query := fmt.Sprintf(
+		"SELECT `raw_json` FROM %s WHERE %s = ? LIMIT 1",
+		quoteSQLIdent(table.Table),
+		quoteSQLIdent(table.PrimaryKey),
+	)
+
+	var raw []byte
+	if err := db.QueryRowContext(ctx, query, id).Scan(&raw); err != nil {
+		return zero, err
+	}
+
+	var item T
+	if err := json.Unmarshal(raw, &item); err != nil {
+		return zero, err
+	}
+	return item, nil
+}
+
 func sqlUpsertJSON(tableName string, item any) error {
 	table, ok := sqlJSONTables[tableName]
 	if !ok {

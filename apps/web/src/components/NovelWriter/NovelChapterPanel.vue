@@ -12,6 +12,14 @@ const props = defineProps<{
   auditLoadingChapterId: string
   bulkGenerateLoading: boolean
   bulkAuditLoading: boolean
+  bulkReviseLoading: boolean
+  fullReviewLoading: boolean
+  bulkGenerateProgressCurrent: number
+  bulkGenerateProgressTotal: number
+  bulkAuditProgressCurrent: number
+  bulkAuditProgressTotal: number
+  bulkReviseProgressCurrent: number
+  bulkReviseProgressTotal: number
   adoptLoadingVersionId: string
   manualSaveLoading: boolean
   approveLoadingChapterId: string
@@ -24,6 +32,8 @@ const emit = defineEmits<{
   audit: [id: string]
   bulkGenerate: []
   bulkAudit: []
+  bulkRevise: []
+  fullReview: []
   revise: [id: string]
   adopt: [chapterId: string, versionId: string]
   manualSave: [chapterId: string, content: string, versionId: string]
@@ -364,10 +374,25 @@ watch(
       </div>
       <div class="panel-head__actions">
         <el-button size="small" :loading="bulkGenerateLoading" :disabled="running && !bulkGenerateLoading" @click="emit('bulkGenerate')">
-          生成所有章节正文
+          <span>{{ bulkGenerateLoading ? '生成中' : '生成所有章节正文' }}</span>
+          <span v-if="bulkGenerateLoading && bulkGenerateProgressTotal" class="panel-head__action-progress">
+            当前第 {{ bulkGenerateProgressCurrent }}/{{ bulkGenerateProgressTotal }} 章
+          </span>
         </el-button>
         <el-button size="small" :loading="bulkAuditLoading" :disabled="running && !bulkAuditLoading" @click="emit('bulkAudit')">
-          审计所有正文
+          <span>{{ bulkAuditLoading ? '审计中' : '审计所有正文' }}</span>
+          <span v-if="bulkAuditLoading && bulkAuditProgressTotal" class="panel-head__action-progress">
+            当前第 {{ bulkAuditProgressCurrent }}/{{ bulkAuditProgressTotal }} 章
+          </span>
+        </el-button>
+        <el-button size="small" :loading="bulkReviseLoading" :disabled="running && !bulkReviseLoading" @click="emit('bulkRevise')">
+          <span>{{ bulkReviseLoading ? '修订中' : '按审计修订所有正文' }}</span>
+          <span v-if="bulkReviseLoading && bulkReviseProgressTotal" class="panel-head__action-progress">
+            当前第 {{ bulkReviseProgressCurrent }}/{{ bulkReviseProgressTotal }} 章
+          </span>
+        </el-button>
+        <el-button size="small" :loading="fullReviewLoading" :disabled="running && !fullReviewLoading" @click="emit('fullReview')">
+          <span>{{ fullReviewLoading ? '核验中' : '全文质量核验' }}</span>
         </el-button>
       </div>
       <div v-if="outlineGenerationText" :class="outlineGenerationClass">
@@ -556,6 +581,12 @@ watch(
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
+}
+
+.panel-head__action-progress {
+  margin-left: 6px;
+  color: #16a34a;
+  font-weight: 800;
 }
 
 .outline-progress {

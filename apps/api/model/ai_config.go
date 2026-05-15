@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"os"
+	"path/filepath"
 )
 
 type AIConfig struct {
@@ -36,6 +37,17 @@ type AIProviderConfig struct {
 }
 
 var GlobalAIConfig *AIConfig
+
+func ResolveAIConfigPath() string {
+	path := os.Getenv("NOVEL_GENERATER_AI_CONFIG_FILE")
+	if path == "" {
+		path = os.Getenv("TESTCENTER_AI_CONFIG_FILE")
+	}
+	if path == "" {
+		path = "data/ai_config.json"
+	}
+	return path
+}
 
 func (c *AIConfig) AllEffectiveProviders() []AIProviderConfig {
 	if c == nil {
@@ -121,13 +133,7 @@ func normalizeAICapability(capability string) string {
 }
 
 func LoadAIConfig() *AIConfig {
-	path := os.Getenv("NOVEL_GENERATER_AI_CONFIG_FILE")
-	if path == "" {
-		path = os.Getenv("TESTCENTER_AI_CONFIG_FILE")
-	}
-	if path == "" {
-		path = "data/ai_config.json"
-	}
+	path := ResolveAIConfigPath()
 	file, err := os.Open(path)
 	if err != nil {
 		log.Printf("[NovelGenerater] Warning: Failed to open %s. Using default empty config: %v", path, err)
@@ -144,4 +150,23 @@ func LoadAIConfig() *AIConfig {
 	GlobalAIConfig = config
 	log.Printf("[NovelGenerater] Loaded AI configuration (Providers: %d, Fallback Model: %s)", len(config.EffectiveProviders()), config.Model)
 	return config
+}
+
+func SaveAIConfig(config *AIConfig) error {
+	if config == nil {
+		config = &AIConfig{}
+	}
+	path := ResolveAIConfigPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, append(data, '\n'), 0o600); err != nil {
+		return err
+	}
+	GlobalAIConfig = config
+	return nil
 }
