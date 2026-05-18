@@ -16,6 +16,7 @@ import {
   emptyNovelWriterSettings,
   type GenerateStyleTemplatePayload,
   novelWriterApi,
+  setNovelWriterClientRuntimeSettings,
   type CreateNovelProjectPayload,
   type NovelExtractedInfo,
   type NovelFullReview,
@@ -66,10 +67,17 @@ const bulkReviseProgress = reactive({ current: 0, total: 0 })
 const pipelineLoading = shallowRef(false)
 const pipelineLabel = shallowRef('AI一条龙')
 const writerSettings = shallowRef<NovelWriterSettings>(emptyNovelWriterSettings())
+const defaultGeneralSettings = emptyNovelWriterSettings().general
 
 const normalizeWriterGeneralSettings = (settings?: NovelWriterSettings['general']) => ({
-  max_chapters: Math.min(Math.max(Number(settings?.max_chapters) || 200, 1), 1000),
-  max_chapter_words: Math.min(Math.max(Number(settings?.max_chapter_words) || 80000, 1200), 200000)
+  ...defaultGeneralSettings,
+  ...(settings || {}),
+  max_chapters: Math.min(Math.max(Number(settings?.max_chapters) || defaultGeneralSettings.max_chapters, 1), 1000),
+  max_chapter_words: Math.min(Math.max(Number(settings?.max_chapter_words) || defaultGeneralSettings.max_chapter_words, 1200), 200000),
+  batch_retry_attempts: Math.min(Math.max(Number(settings?.batch_retry_attempts) || defaultGeneralSettings.batch_retry_attempts, 1), 10),
+  outline_wait_timeout_minutes: Math.min(Math.max(Number(settings?.outline_wait_timeout_minutes) || defaultGeneralSettings.outline_wait_timeout_minutes, 1), 120),
+  runtime_polling_interval_ms: Math.min(Math.max(Number(settings?.runtime_polling_interval_ms) || defaultGeneralSettings.runtime_polling_interval_ms, 500), 10000),
+  outline_polling_interval_ms: Math.min(Math.max(Number(settings?.outline_polling_interval_ms) || defaultGeneralSettings.outline_polling_interval_ms, 1000), 30000)
 })
 
 const writerGeneralSettings = computed(() => normalizeWriterGeneralSettings(writerSettings.value.general))
@@ -421,6 +429,7 @@ const loadWriterSettings = async (silent = false) => {
   if (!silent) settingsLoading.value = true
   try {
     writerSettings.value = await novelWriterApi.getSettings()
+    setNovelWriterClientRuntimeSettings(writerSettings.value.general)
   } catch (error) {
     if (!silent) ElMessage.error(`加载创作设置失败：${getErrorMessage(error)}`)
   } finally {
@@ -432,6 +441,7 @@ const saveWriterSettings = async (payload: NovelWriterSettings) => {
   settingsSaving.value = true
   try {
     writerSettings.value = await novelWriterApi.updateSettings(payload)
+    setNovelWriterClientRuntimeSettings(writerSettings.value.general)
     settingsDialogVisible.value = false
     ElMessage.success('创作设置已保存')
   } catch (error) {
@@ -461,7 +471,7 @@ const startRuntimeTaskPolling = () => {
   fetchRuntimeTasks(true)
   runtimeTaskTimer.value = window.setInterval(() => {
     fetchRuntimeTasks(true)
-  }, 1500)
+  }, writerGeneralSettings.value.runtime_polling_interval_ms)
 }
 
 const cancelRuntimeTask = async (taskId: string) => {
@@ -607,7 +617,7 @@ const startOutlinePolling = (projectId: string) => {
       stopOutlinePolling()
       ElMessage.error(`刷新大纲进度失败：${getErrorMessage(error)}`)
     }
-  }, 5000)
+  }, writerGeneralSettings.value.outline_polling_interval_ms)
 }
 
 watch(
@@ -745,7 +755,7 @@ const analyzeStyle = async () => {
 
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
-const waitForOutlineReady = async (projectId: string, timeoutMs = 15 * 60 * 1000) => {
+const waitForOutlineReady = async (projectId: string, timeoutMs = writerGeneralSettings.value.outline_wait_timeout_minutes * 60 * 1000) => {
   const startedAt = Date.now()
   while (Date.now() - startedAt < timeoutMs) {
     const project = normalizeStaleOutlineProject(await novelWriterApi.getProject(projectId))
@@ -963,7 +973,7 @@ const generateAllChapters = async (managedByWorkflow = false) => {
       try {
         const project = await retryAsync(
           () => novelWriterApi.generateChapter(selectedProject.value!.id, outlineId),
-          3
+          writerGeneralSettings.value.batch_retry_attempts
         )
         syncSelectedProject(project)
         successCount += 1
@@ -1028,7 +1038,7 @@ const auditAllChapters = async (managedByWorkflow = false) => {
       try {
         const project = await retryAsync(
           () => novelWriterApi.auditChapter(selectedProject.value!.id, chapterId),
-          3
+          writerGeneralSettings.value.batch_retry_attempts
         )
         syncSelectedProject(project)
         successCount += 1
@@ -1093,7 +1103,7 @@ const reviseAllChapters = async (managedByWorkflow = false) => {
       try {
         const project = await retryAsync(
           () => novelWriterApi.reviseChapter(selectedProject.value!.id, chapterId),
-          3
+          writerGeneralSettings.value.batch_retry_attempts
         )
         syncSelectedProject(project)
         successCount += 1
@@ -1144,7 +1154,7 @@ const adoptAllRevisionVersions = async () => {
     try {
       const project = await retryAsync(
         () => novelWriterApi.adoptChapterVersion(selectedProject.value!.id, chapter.id, revisionVersionId),
-        3
+        writerGeneralSettings.value.batch_retry_attempts
       )
       syncSelectedProject(project)
       adoptedCount += 1
@@ -1176,7 +1186,7 @@ const approveAllChapters = async () => {
     try {
       const project = await retryAsync(
         () => novelWriterApi.approveChapter(selectedProject.value!.id, chapterId),
-        3
+        writerGeneralSettings.value.batch_retry_attempts
       )
       syncSelectedProject(project)
       approvedCount += 1

@@ -641,7 +641,7 @@ func PlanNovelOutlineHandler(c *gin.Context) {
 	if chapterCount <= 0 {
 		chapterCount = minInt(8, general.MaxChapters)
 	}
-	batchSize := 1
+	batchSize := general.OutlineInitialBatchSize
 	if chapterCount < batchSize {
 		batchSize = chapterCount
 	}
@@ -657,7 +657,7 @@ func PlanNovelOutlineHandler(c *gin.Context) {
 	}
 	outline.TargetChapters = chapterCount
 	outline.GeneratedChapters = len(outline.Chapters)
-	outline.BatchSize = 5
+	outline.BatchSize = general.OutlineBatchSize
 	outline.GenerationStatus = "ready"
 	outline.GenerationError = ""
 	if len(outline.Chapters) < chapterCount {
@@ -695,11 +695,12 @@ func AnalyzeNovelStyleHandler(c *gin.Context) {
 	}
 	taskCtx, task := beginNovelRuntimeTask(project, "style", "文风画像")
 	defer task.finish()
+	general := loadNovelWriterGeneralSettings()
 	system := "你是文风分析师。你只能提炼抽象风格规则，不能复刻原文句子、设定、人物或情节。请只输出 JSON。"
 	referenceText := strings.TrimSpace(project.Materials.ReferenceRaw)
 	referenceInstruction := "用户未提供文风参考文本。请结合小说题材、事实库和商业网文可读性，生成一套原创、自然、不带明显 AI 味的默认文风画像。"
 	if referenceText != "" {
-		referenceInstruction = fmt.Sprintf("参考文本（若全文较长，已按开篇、中段、后段抽样）：\n%s", sampleTextForAI(referenceText, 12000))
+		referenceInstruction = fmt.Sprintf("参考文本（若全文较长，已按开篇、中段、后段抽样）：\n%s", sampleTextForAI(referenceText, general.StyleReferenceSampleRunes))
 	}
 	user := fmt.Sprintf(`分析参考文本的整体文风，用于后续原创小说的抽象风格指导。
 输出 JSON schema:
@@ -772,7 +773,8 @@ func GenerateNovelChapterHandler(c *gin.Context) {
 		AfterState NovelChapterState `json:"after_state"`
 		NewHooks   []string          `json:"new_hooks"`
 	}
-	if err := callNovelAIJSONWithTimeoutContext(taskCtx, system, user, &generated, novelChapterMaxTokens(targetWords), 240*time.Second); err != nil {
+	general := loadNovelWriterGeneralSettings()
+	if err := callNovelAIJSONWithTimeoutContext(taskCtx, system, user, &generated, novelChapterMaxTokens(targetWords), time.Duration(general.ChapterAIBackendTimeoutSeconds)*time.Second); err != nil {
 		if isContextCanceledError(err) {
 			c.JSON(http.StatusConflict, gin.H{"error": "正文生成任务已终止"})
 			return
@@ -817,6 +819,7 @@ func AuditNovelChapterHandler(c *gin.Context) {
 	}
 	taskCtx, task := beginNovelRuntimeTask(project, "chapter_audit", fmt.Sprintf("章节审计：%s", chapter.Title))
 	defer task.finish()
+	general := loadNovelWriterGeneralSettings()
 	system := "你是小说审计员，从 AI 味、人物一致性、剧情漏洞、文风贴合度审计章节。请只输出 JSON。"
 	user := fmt.Sprintf(`审计以下章节。
 %s
@@ -832,7 +835,7 @@ func AuditNovelChapterHandler(c *gin.Context) {
 事实库：%s
 文风画像：%s
 章节标题：%s
-章节正文：%s`, novelAuditSkillGuide, mustJSON(project.Extracted), mustJSON(project.StyleProfile), chapter.Title, truncateForAI(chapter.Content, 16000))
+章节正文：%s`, novelAuditSkillGuide, mustJSON(project.Extracted), mustJSON(project.StyleProfile), chapter.Title, truncateForAI(chapter.Content, general.AuditContentMaxRunes))
 
 	var report NovelAuditReport
 	if err := callNovelAIJSONContext(taskCtx, system, user, &report); err != nil {
@@ -864,12 +867,13 @@ func ReviseNovelChapterHandler(c *gin.Context) {
 	}
 	taskCtx, task := beginNovelRuntimeTask(project, "chapter_revise", fmt.Sprintf("审计修订：%s", chapter.Title))
 	defer task.finish()
+	general := loadNovelWriterGeneralSettings()
 	system := "你是小说修订者。根据审计意见修复问题，保留原章节优点。请只输出 JSON。"
 	user := fmt.Sprintf(`根据审计意见修订章节。
 输出 JSON schema: {"content":"","summary":""}
 
 审计意见：%s
-原正文：%s`, mustJSON(chapter.Audit), truncateForAI(chapter.Content, 16000))
+原正文：%s`, mustJSON(chapter.Audit), truncateForAI(chapter.Content, general.RevisionContentMaxRunes))
 
 	var revised struct {
 		Content string `json:"content"`
@@ -975,7 +979,8 @@ func ReviewNovelFullQualityHandler(c *gin.Context) {
 
 	taskCtx, task := beginNovelRuntimeTask(project, "full_review", "全文质量核验")
 	defer task.finish()
-	chapterPayload := truncateForAI(mustJSON(buildNovelFullReviewPayload(chapters)), 220000)
+	general := loadNovelWriterGeneralSettings()
+	chapterPayload := truncateForAI(mustJSON(buildNovelFullReviewPayload(chapters)), general.FullReviewPayloadMaxRunes)
 
 	system := "你是中文长篇小说总审校，负责从全本层面检查逻辑合理性、剧情连贯性、角色设定一致性、事件触发合理性。请只输出 JSON。"
 	user := fmt.Sprintf(`请对这部小说做全文质量核验，重点检查：
@@ -1000,7 +1005,7 @@ func ReviewNovelFullQualityHandler(c *gin.Context) {
 章节正文：%s`, project.Title, mustJSON(project.Extracted), mustJSON(project.StyleProfile), mustJSON(project.Outline.Chapters), chapterPayload)
 
 	var report NovelFullReview
-	if err := callNovelAIJSONWithTimeoutContext(taskCtx, system, user, &report, 0, 240*time.Second); err != nil {
+	if err := callNovelAIJSONWithTimeoutContext(taskCtx, system, user, &report, 0, time.Duration(general.FullReviewAIBackendTimeoutSeconds)*time.Second); err != nil {
 		if isContextCanceledError(err) {
 			c.JSON(http.StatusConflict, gin.H{"error": "全文质量核验任务已终止"})
 			return
@@ -1046,7 +1051,8 @@ func ReviseNovelByFullReviewHandler(c *gin.Context) {
 
 	taskCtx, task := beginNovelRuntimeTask(project, "full_review_revise", "按核验结果修订全文")
 	defer task.finish()
-	chapterPayload := truncateForAI(mustJSON(buildNovelFullReviewPayload(chapters)), 220000)
+	general := loadNovelWriterGeneralSettings()
+	chapterPayload := truncateForAI(mustJSON(buildNovelFullReviewPayload(chapters)), general.FullReviewPayloadMaxRunes)
 
 	system := "你是中文长篇小说总编修订者。请严格按照全文核验意见修订小说全文，只输出 JSON。"
 	user := fmt.Sprintf(`请根据全文质量核验结果，对这部小说做全书级修订。
@@ -1072,7 +1078,7 @@ func ReviseNovelByFullReviewHandler(c *gin.Context) {
 			Reason    string `json:"reason"`
 		} `json:"chapters"`
 	}
-	if err := callNovelAIJSONWithTimeoutContext(taskCtx, system, user, &revised, 0, 240*time.Second); err != nil {
+	if err := callNovelAIJSONWithTimeoutContext(taskCtx, system, user, &revised, 0, time.Duration(general.FullReviewAIBackendTimeoutSeconds)*time.Second); err != nil {
 		if isContextCanceledError(err) {
 			c.JSON(http.StatusConflict, gin.H{"error": "全文修订任务已终止"})
 			return
@@ -1247,7 +1253,8 @@ func hasChapterForOutline(chapters []NovelChapter, outlineID string) bool {
 
 func generateNovelOutlineBatchAdaptive(ctx context.Context, project NovelProject, startChapter int, totalChapters int, existing NovelOutline, preferredBatchSize int) (NovelOutline, int, error) {
 	var lastErr error
-	for _, batchSize := range novelOutlineBatchCandidates(preferredBatchSize, totalChapters-startChapter+1) {
+	general := loadNovelWriterGeneralSettings()
+	for _, batchSize := range novelOutlineBatchCandidates(preferredBatchSize, totalChapters-startChapter+1, general.OutlineBatchSize) {
 		if ctx.Err() != nil {
 			return NovelOutline{}, 0, ctx.Err()
 		}
@@ -1267,8 +1274,8 @@ func generateNovelOutlineBatchAdaptive(ctx context.Context, project NovelProject
 	return NovelOutline{}, 0, fmt.Errorf("outline batch starting at chapter %d failed after adaptive retries: %w", startChapter, lastErr)
 }
 
-func novelOutlineBatchCandidates(preferredBatchSize int, remainingChapters int) []int {
-	raw := []int{preferredBatchSize, 5, 3, 1}
+func novelOutlineBatchCandidates(preferredBatchSize int, remainingChapters int, fallbackBatchSize int) []int {
+	raw := []int{preferredBatchSize, fallbackBatchSize, 5, 3, 1}
 	candidates := make([]int, 0, len(raw))
 	seen := map[int]bool{}
 	for _, size := range raw {
@@ -1332,22 +1339,24 @@ func generateNovelOutlineBatch(ctx context.Context, project NovelProject, startC
 }
 
 func compactNovelMaterialsForOutline(materials NovelMaterials) NovelMaterials {
+	general := loadNovelWriterGeneralSettings()
 	return NovelMaterials{
-		RawText:      truncateForAI(materials.RawText, 4000),
-		CharacterRaw: truncateForAI(materials.CharacterRaw, 6000),
-		WorldRaw:     truncateForAI(materials.WorldRaw, 5000),
-		ConflictRaw:  truncateForAI(materials.ConflictRaw, 5000),
+		RawText:      truncateForAI(materials.RawText, general.MaterialRawMaxRunes),
+		CharacterRaw: truncateForAI(materials.CharacterRaw, general.MaterialCharacterMaxRunes),
+		WorldRaw:     truncateForAI(materials.WorldRaw, general.MaterialWorldMaxRunes),
+		ConflictRaw:  truncateForAI(materials.ConflictRaw, general.MaterialConflictMaxRunes),
 		ReferenceRaw: "",
 	}
 }
 
 func compactNovelExtractedForPrompt(extracted NovelExtractedInfo) NovelExtractedInfo {
+	general := loadNovelWriterGeneralSettings()
 	return NovelExtractedInfo{
-		Characters:    compactNovelInfoCardsForPrompt(extracted.Characters, 40),
-		WorldRules:    compactNovelInfoCardsForPrompt(extracted.WorldRules, 40),
-		Conflicts:     compactNovelInfoCardsForPrompt(extracted.Conflicts, 40),
-		KeyEvents:     compactNovelInfoCardsForPrompt(extracted.KeyEvents, 40),
-		OpenQuestions: compactNovelStringsForPrompt(extracted.OpenQuestions, 40, 300),
+		Characters:    compactNovelInfoCardsForPrompt(extracted.Characters, general.PromptCardLimit),
+		WorldRules:    compactNovelInfoCardsForPrompt(extracted.WorldRules, general.PromptCardLimit),
+		Conflicts:     compactNovelInfoCardsForPrompt(extracted.Conflicts, general.PromptCardLimit),
+		KeyEvents:     compactNovelInfoCardsForPrompt(extracted.KeyEvents, general.PromptCardLimit),
+		OpenQuestions: compactNovelStringsForPrompt(extracted.OpenQuestions, general.PromptCardLimit, general.PromptQuestionMaxRunes),
 	}
 }
 
@@ -1356,10 +1365,11 @@ func compactNovelInfoCardsForPrompt(items []NovelInfoCard, limit int) []NovelInf
 		limit = len(items)
 	}
 	result := make([]NovelInfoCard, 0, limit)
+	general := loadNovelWriterGeneralSettings()
 	for _, item := range items[:limit] {
 		result = append(result, NovelInfoCard{
-			Name:        truncateForAI(item.Name, 120),
-			Description: truncateForAI(item.Description, 500),
+			Name:        truncateForAI(item.Name, general.PromptCardNameMaxRunes),
+			Description: truncateForAI(item.Description, general.PromptCardDescriptionMaxRunes),
 		})
 	}
 	return result
@@ -1455,7 +1465,7 @@ func continueNovelOutlineGeneration(ctx context.Context, projectID string) {
 		}
 		batchSize := project.Outline.BatchSize
 		if batchSize <= 0 {
-			batchSize = 5
+			batchSize = loadNovelWriterGeneralSettings().OutlineBatchSize
 		}
 		start := len(project.Outline.Chapters) + 1
 		end := start + batchSize - 1
@@ -1518,6 +1528,7 @@ func novelChapterTargetWords(project NovelProject) int {
 }
 
 func novelChapterMaxTokens(targetWords int) int {
+	maxTokensLimit := loadNovelWriterGeneralSettings().ChapterMaxTokens
 	if targetWords <= 0 {
 		return 9000
 	}
@@ -1525,8 +1536,8 @@ func novelChapterMaxTokens(targetWords int) int {
 	if maxTokens < 9000 {
 		return 9000
 	}
-	if maxTokens > 120000 {
-		return 120000
+	if maxTokens > maxTokensLimit {
+		return maxTokensLimit
 	}
 	return maxTokens
 }
@@ -1648,7 +1659,7 @@ func callNovelAIJSONWithTimeoutContext(ctx context.Context, systemPrompt string,
 	}
 	metrics := novelAIRequestMetrics(provider, systemPrompt, userPrompt, maxTokens)
 	if requestTimeout <= 0 {
-		requestTimeout = 110 * time.Second
+		requestTimeout = time.Duration(loadNovelWriterGeneralSettings().DefaultAIBackendTimeoutSeconds) * time.Second
 	}
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
@@ -1680,7 +1691,7 @@ func callNovelAIJSONWithTimeoutContext(ctx context.Context, systemPrompt string,
 }
 
 func callNovelAIJSONWithMaxTokensContext(ctx context.Context, systemPrompt string, userPrompt string, target any, maxTokens int) error {
-	return callNovelAIJSONWithTimeoutContext(ctx, systemPrompt, userPrompt, target, maxTokens, 110*time.Second)
+	return callNovelAIJSONWithTimeoutContext(ctx, systemPrompt, userPrompt, target, maxTokens, time.Duration(loadNovelWriterGeneralSettings().DefaultAIBackendTimeoutSeconds)*time.Second)
 }
 
 func isContextCanceledError(err error) bool {
@@ -1688,13 +1699,14 @@ func isContextCanceledError(err error) bool {
 }
 
 func novelOutlineMaxTokens(chapterCount int) int {
+	general := loadNovelWriterGeneralSettings()
 	if chapterCount <= 1 {
-		return 9000
+		return general.OutlineSmallBatchMaxTokens
 	}
 	if chapterCount <= 3 {
-		return 18000
+		return general.OutlineMediumBatchMaxTokens
 	}
-	return 30000
+	return general.OutlineLargeBatchMaxTokens
 }
 
 func novelAIRequestMetrics(provider feishumodel.AIProviderConfig, systemPrompt string, userPrompt string, maxTokens int) string {

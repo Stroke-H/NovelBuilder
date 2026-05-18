@@ -159,7 +159,8 @@ func cancelNovelRuntimeTask(taskID string) error {
 }
 
 func pruneFinishedNovelRuntimeTasksLocked() {
-	cutoff := time.Now().Add(-10 * time.Minute)
+	retentionMinutes := loadNovelWriterGeneralSettings().FinishedTaskRetentionMinutes
+	cutoff := time.Now().Add(-time.Duration(retentionMinutes) * time.Minute)
 	for id, entry := range novelRuntimeTaskRegistry.tasks {
 		if entry == nil || entry.task.FinishedAt == "" {
 			continue

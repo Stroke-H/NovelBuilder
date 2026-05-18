@@ -1,12 +1,28 @@
 import request from '@/api/request'
 
-const novelAIRequestConfig = {
-  timeout: 120000
+const novelWriterClientRuntimeSettings = {
+  frontend_request_timeout_seconds: 15,
+  ai_request_timeout_seconds: 120,
+  ai_long_request_timeout_seconds: 300
 }
 
-const novelLongAIRequestConfig = {
-  timeout: 300000
+export function setNovelWriterClientRuntimeSettings(settings?: Partial<NovelWriterGeneralSettings>) {
+  novelWriterClientRuntimeSettings.frontend_request_timeout_seconds = Number(settings?.frontend_request_timeout_seconds) || 15
+  novelWriterClientRuntimeSettings.ai_request_timeout_seconds = Number(settings?.ai_request_timeout_seconds) || 120
+  novelWriterClientRuntimeSettings.ai_long_request_timeout_seconds = Number(settings?.ai_long_request_timeout_seconds) || 300
 }
+
+const novelRequestConfig = () => ({
+  timeout: novelWriterClientRuntimeSettings.frontend_request_timeout_seconds * 1000
+})
+
+const novelAIRequestConfig = () => ({
+  timeout: novelWriterClientRuntimeSettings.ai_request_timeout_seconds * 1000
+})
+
+const novelLongAIRequestConfig = () => ({
+  timeout: novelWriterClientRuntimeSettings.ai_long_request_timeout_seconds * 1000
+})
 
 export interface NovelInfoCard {
   name: string
@@ -197,6 +213,44 @@ export interface NovelWriterAISettings {
 export interface NovelWriterGeneralSettings {
   max_chapters: number
   max_chapter_words: number
+  db_max_open_conns: number
+  db_max_idle_conns: number
+  db_conn_max_lifetime_minutes: number
+  db_timeout_seconds: number
+  frontend_request_timeout_seconds: number
+  ai_request_timeout_seconds: number
+  ai_long_request_timeout_seconds: number
+  default_ai_backend_timeout_seconds: number
+  chapter_ai_backend_timeout_seconds: number
+  full_review_ai_backend_timeout_seconds: number
+  style_template_chapter_timeout_seconds: number
+  style_template_summary_timeout_seconds: number
+  chapter_max_tokens: number
+  style_reference_sample_runes: number
+  audit_content_max_runes: number
+  revision_content_max_runes: number
+  full_review_payload_max_runes: number
+  style_template_chapter_runes: number
+  style_template_observations_max_runes: number
+  material_raw_max_runes: number
+  material_character_max_runes: number
+  material_world_max_runes: number
+  material_conflict_max_runes: number
+  prompt_card_limit: number
+  prompt_card_name_max_runes: number
+  prompt_card_description_max_runes: number
+  prompt_question_max_runes: number
+  outline_initial_batch_size: number
+  outline_batch_size: number
+  outline_small_batch_max_tokens: number
+  outline_medium_batch_max_tokens: number
+  outline_large_batch_max_tokens: number
+  batch_retry_attempts: number
+  outline_wait_timeout_minutes: number
+  runtime_polling_interval_ms: number
+  outline_polling_interval_ms: number
+  finished_task_retention_minutes: number
+  style_template_retry_attempts: number
 }
 
 export interface NovelStyleTemplate {
@@ -268,7 +322,45 @@ export function emptyNovelWriterSettings(): NovelWriterSettings {
     },
     general: {
       max_chapters: 200,
-      max_chapter_words: 80000
+      max_chapter_words: 80000,
+      db_max_open_conns: 10,
+      db_max_idle_conns: 5,
+      db_conn_max_lifetime_minutes: 30,
+      db_timeout_seconds: 5,
+      frontend_request_timeout_seconds: 15,
+      ai_request_timeout_seconds: 120,
+      ai_long_request_timeout_seconds: 300,
+      default_ai_backend_timeout_seconds: 110,
+      chapter_ai_backend_timeout_seconds: 240,
+      full_review_ai_backend_timeout_seconds: 240,
+      style_template_chapter_timeout_seconds: 120,
+      style_template_summary_timeout_seconds: 180,
+      chapter_max_tokens: 120000,
+      style_reference_sample_runes: 12000,
+      audit_content_max_runes: 16000,
+      revision_content_max_runes: 16000,
+      full_review_payload_max_runes: 220000,
+      style_template_chapter_runes: 7000,
+      style_template_observations_max_runes: 70000,
+      material_raw_max_runes: 4000,
+      material_character_max_runes: 6000,
+      material_world_max_runes: 5000,
+      material_conflict_max_runes: 5000,
+      prompt_card_limit: 40,
+      prompt_card_name_max_runes: 120,
+      prompt_card_description_max_runes: 500,
+      prompt_question_max_runes: 300,
+      outline_initial_batch_size: 1,
+      outline_batch_size: 5,
+      outline_small_batch_max_tokens: 9000,
+      outline_medium_batch_max_tokens: 18000,
+      outline_large_batch_max_tokens: 30000,
+      batch_retry_attempts: 3,
+      outline_wait_timeout_minutes: 15,
+      runtime_polling_interval_ms: 1500,
+      outline_polling_interval_ms: 5000,
+      finished_task_retention_minutes: 10,
+      style_template_retry_attempts: 3
     },
     style_templates: []
   }
@@ -276,16 +368,16 @@ export function emptyNovelWriterSettings(): NovelWriterSettings {
 
 export const novelWriterApi = {
   listProjects() {
-    return request.get('/novel-writer/projects') as Promise<NovelProject[]>
+    return request.get('/novel-writer/projects', novelRequestConfig()) as Promise<NovelProject[]>
   },
   createProject(payload: CreateNovelProjectPayload) {
-    return request.post('/novel-writer/projects', payload) as Promise<NovelProject>
+    return request.post('/novel-writer/projects', payload, novelRequestConfig()) as Promise<NovelProject>
   },
   getProject(projectId: string) {
-    return request.get(`/novel-writer/projects/${projectId}`) as Promise<NovelProject>
+    return request.get(`/novel-writer/projects/${projectId}`, novelRequestConfig()) as Promise<NovelProject>
   },
   updateProject(project: NovelProject) {
-    return request.put(`/novel-writer/projects/${project.id}`, project) as Promise<NovelProject>
+    return request.put(`/novel-writer/projects/${project.id}`, project, novelRequestConfig()) as Promise<NovelProject>
   },
   deleteProject(projectId: string) {
     return request.delete(`/novel-writer/projects/${projectId}`) as Promise<void>
@@ -294,50 +386,50 @@ export const novelWriterApi = {
     return request.post(`/novel-writer/projects/${projectId}/delete`) as Promise<void>
   },
   extractInfo(projectId: string) {
-    return request.post(`/novel-writer/projects/${projectId}/extract`, undefined, novelAIRequestConfig) as Promise<NovelProject>
+    return request.post(`/novel-writer/projects/${projectId}/extract`, undefined, novelAIRequestConfig()) as Promise<NovelProject>
   },
   planOutline(projectId: string) {
-    return request.post(`/novel-writer/projects/${projectId}/outline`, undefined, novelAIRequestConfig) as Promise<NovelProject>
+    return request.post(`/novel-writer/projects/${projectId}/outline`, undefined, novelAIRequestConfig()) as Promise<NovelProject>
   },
   analyzeStyle(projectId: string) {
-    return request.post(`/novel-writer/projects/${projectId}/style`, undefined, novelAIRequestConfig) as Promise<NovelProject>
+    return request.post(`/novel-writer/projects/${projectId}/style`, undefined, novelAIRequestConfig()) as Promise<NovelProject>
   },
   generateChapter(projectId: string, outlineId?: string) {
     return request.post(`/novel-writer/projects/${projectId}/chapters/generate`, {
       outline_id: outlineId || ''
-    }, novelLongAIRequestConfig) as Promise<NovelProject>
+    }, novelLongAIRequestConfig()) as Promise<NovelProject>
   },
   auditChapter(projectId: string, chapterId: string) {
-    return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/audit`, undefined, novelAIRequestConfig) as Promise<NovelProject>
+    return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/audit`, undefined, novelAIRequestConfig()) as Promise<NovelProject>
   },
   reviseChapter(projectId: string, chapterId: string) {
-    return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/revise`, undefined, novelAIRequestConfig) as Promise<NovelProject>
+    return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/revise`, undefined, novelAIRequestConfig()) as Promise<NovelProject>
   },
   fullReviewProject(projectId: string) {
-    return request.post(`/novel-writer/projects/${projectId}/full-review`, undefined, novelLongAIRequestConfig) as Promise<NovelProject>
+    return request.post(`/novel-writer/projects/${projectId}/full-review`, undefined, novelLongAIRequestConfig()) as Promise<NovelProject>
   },
   reviseProjectByFullReview(projectId: string) {
-    return request.post(`/novel-writer/projects/${projectId}/full-review/revise`, undefined, novelLongAIRequestConfig) as Promise<NovelProject>
+    return request.post(`/novel-writer/projects/${projectId}/full-review/revise`, undefined, novelLongAIRequestConfig()) as Promise<NovelProject>
   },
   adoptChapterVersion(projectId: string, chapterId: string, versionId: string) {
-    return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/versions/${versionId}/adopt`) as Promise<NovelProject>
+    return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/versions/${versionId}/adopt`, undefined, novelRequestConfig()) as Promise<NovelProject>
   },
   approveChapter(projectId: string, chapterId: string) {
-    return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/approve`) as Promise<NovelProject>
+    return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/approve`, undefined, novelRequestConfig()) as Promise<NovelProject>
   },
   getSettings() {
-    return request.get('/novel-writer/settings') as Promise<NovelWriterSettings>
+    return request.get('/novel-writer/settings', novelRequestConfig()) as Promise<NovelWriterSettings>
   },
   updateSettings(payload: NovelWriterSettings) {
-    return request.put('/novel-writer/settings', payload) as Promise<NovelWriterSettings>
+    return request.put('/novel-writer/settings', payload, novelRequestConfig()) as Promise<NovelWriterSettings>
   },
   generateStyleTemplate(payload: GenerateStyleTemplatePayload) {
-    return request.post('/novel-writer/settings/style-templates/generate', payload, novelLongAIRequestConfig) as Promise<{ ok: boolean; task_id: string }>
+    return request.post('/novel-writer/settings/style-templates/generate', payload, novelLongAIRequestConfig()) as Promise<{ ok: boolean; task_id: string }>
   },
   listRuntimeTasks() {
-    return request.get('/novel-writer/tasks') as Promise<NovelRuntimeTask[]>
+    return request.get('/novel-writer/tasks', novelRequestConfig()) as Promise<NovelRuntimeTask[]>
   },
   cancelRuntimeTask(taskId: string) {
-    return request.post(`/novel-writer/tasks/${taskId}/cancel`) as Promise<{ ok: boolean }>
+    return request.post(`/novel-writer/tasks/${taskId}/cancel`, undefined, novelRequestConfig()) as Promise<{ ok: boolean }>
   }
 }

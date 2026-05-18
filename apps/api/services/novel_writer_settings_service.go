@@ -25,8 +25,46 @@ type NovelStyleTemplate struct {
 }
 
 type NovelWriterGeneralSettings struct {
-	MaxChapters     int `json:"max_chapters"`
-	MaxChapterWords int `json:"max_chapter_words"`
+	MaxChapters                        int `json:"max_chapters"`
+	MaxChapterWords                    int `json:"max_chapter_words"`
+	DBMaxOpenConns                     int `json:"db_max_open_conns"`
+	DBMaxIdleConns                     int `json:"db_max_idle_conns"`
+	DBConnMaxLifetimeMinutes           int `json:"db_conn_max_lifetime_minutes"`
+	DBTimeoutSeconds                   int `json:"db_timeout_seconds"`
+	FrontendRequestTimeoutSeconds      int `json:"frontend_request_timeout_seconds"`
+	AIRequestTimeoutSeconds            int `json:"ai_request_timeout_seconds"`
+	AILongRequestTimeoutSeconds        int `json:"ai_long_request_timeout_seconds"`
+	DefaultAIBackendTimeoutSeconds     int `json:"default_ai_backend_timeout_seconds"`
+	ChapterAIBackendTimeoutSeconds     int `json:"chapter_ai_backend_timeout_seconds"`
+	FullReviewAIBackendTimeoutSeconds  int `json:"full_review_ai_backend_timeout_seconds"`
+	StyleTemplateChapterTimeoutSeconds int `json:"style_template_chapter_timeout_seconds"`
+	StyleTemplateSummaryTimeoutSeconds int `json:"style_template_summary_timeout_seconds"`
+	ChapterMaxTokens                   int `json:"chapter_max_tokens"`
+	StyleReferenceSampleRunes          int `json:"style_reference_sample_runes"`
+	AuditContentMaxRunes               int `json:"audit_content_max_runes"`
+	RevisionContentMaxRunes            int `json:"revision_content_max_runes"`
+	FullReviewPayloadMaxRunes          int `json:"full_review_payload_max_runes"`
+	StyleTemplateChapterRunes          int `json:"style_template_chapter_runes"`
+	StyleTemplateObservationsMaxRunes  int `json:"style_template_observations_max_runes"`
+	MaterialRawMaxRunes                int `json:"material_raw_max_runes"`
+	MaterialCharacterMaxRunes          int `json:"material_character_max_runes"`
+	MaterialWorldMaxRunes              int `json:"material_world_max_runes"`
+	MaterialConflictMaxRunes           int `json:"material_conflict_max_runes"`
+	PromptCardLimit                    int `json:"prompt_card_limit"`
+	PromptCardNameMaxRunes             int `json:"prompt_card_name_max_runes"`
+	PromptCardDescriptionMaxRunes      int `json:"prompt_card_description_max_runes"`
+	PromptQuestionMaxRunes             int `json:"prompt_question_max_runes"`
+	OutlineInitialBatchSize            int `json:"outline_initial_batch_size"`
+	OutlineBatchSize                   int `json:"outline_batch_size"`
+	OutlineSmallBatchMaxTokens         int `json:"outline_small_batch_max_tokens"`
+	OutlineMediumBatchMaxTokens        int `json:"outline_medium_batch_max_tokens"`
+	OutlineLargeBatchMaxTokens         int `json:"outline_large_batch_max_tokens"`
+	BatchRetryAttempts                 int `json:"batch_retry_attempts"`
+	OutlineWaitTimeoutMinutes          int `json:"outline_wait_timeout_minutes"`
+	RuntimePollingIntervalMs           int `json:"runtime_polling_interval_ms"`
+	OutlinePollingIntervalMs           int `json:"outline_polling_interval_ms"`
+	FinishedTaskRetentionMinutes       int `json:"finished_task_retention_minutes"`
+	StyleTemplateRetryAttempts         int `json:"style_template_retry_attempts"`
 }
 
 type NovelWriterLocalSettings struct {
@@ -160,25 +198,60 @@ func loadNovelWriterSettingsPayload() (NovelWriterSettingsPayload, error) {
 }
 
 func normalizeNovelWriterGeneralSettings(settings NovelWriterGeneralSettings) NovelWriterGeneralSettings {
-	if settings.MaxChapters <= 0 {
-		settings.MaxChapters = defaultNovelMaxChapters
-	}
-	if settings.MaxChapters < 1 {
-		settings.MaxChapters = 1
-	}
-	if settings.MaxChapters > 1000 {
-		settings.MaxChapters = 1000
-	}
-	if settings.MaxChapterWords <= 0 {
-		settings.MaxChapterWords = defaultNovelMaxChapterWords
-	}
-	if settings.MaxChapterWords < 1200 {
-		settings.MaxChapterWords = 1200
-	}
-	if settings.MaxChapterWords > 200000 {
-		settings.MaxChapterWords = 200000
-	}
+	settings.MaxChapters = normalizeIntSetting(settings.MaxChapters, defaultNovelMaxChapters, 1, 1000)
+	settings.MaxChapterWords = normalizeIntSetting(settings.MaxChapterWords, defaultNovelMaxChapterWords, 1200, 200000)
+	settings.DBMaxOpenConns = normalizeIntSetting(settings.DBMaxOpenConns, 10, 1, 100)
+	settings.DBMaxIdleConns = normalizeIntSetting(settings.DBMaxIdleConns, 5, 1, settings.DBMaxOpenConns)
+	settings.DBConnMaxLifetimeMinutes = normalizeIntSetting(settings.DBConnMaxLifetimeMinutes, 30, 1, 240)
+	settings.DBTimeoutSeconds = normalizeIntSetting(settings.DBTimeoutSeconds, 5, 1, 60)
+	settings.FrontendRequestTimeoutSeconds = normalizeIntSetting(settings.FrontendRequestTimeoutSeconds, 15, 5, 120)
+	settings.AIRequestTimeoutSeconds = normalizeIntSetting(settings.AIRequestTimeoutSeconds, 120, 30, 600)
+	settings.AILongRequestTimeoutSeconds = normalizeIntSetting(settings.AILongRequestTimeoutSeconds, 300, 60, 1800)
+	settings.DefaultAIBackendTimeoutSeconds = normalizeIntSetting(settings.DefaultAIBackendTimeoutSeconds, 110, 30, 600)
+	settings.ChapterAIBackendTimeoutSeconds = normalizeIntSetting(settings.ChapterAIBackendTimeoutSeconds, 240, 60, 1800)
+	settings.FullReviewAIBackendTimeoutSeconds = normalizeIntSetting(settings.FullReviewAIBackendTimeoutSeconds, 240, 60, 1800)
+	settings.StyleTemplateChapterTimeoutSeconds = normalizeIntSetting(settings.StyleTemplateChapterTimeoutSeconds, 120, 30, 900)
+	settings.StyleTemplateSummaryTimeoutSeconds = normalizeIntSetting(settings.StyleTemplateSummaryTimeoutSeconds, 180, 30, 1200)
+	settings.ChapterMaxTokens = normalizeIntSetting(settings.ChapterMaxTokens, 120000, 9000, 200000)
+	settings.StyleReferenceSampleRunes = normalizeIntSetting(settings.StyleReferenceSampleRunes, 12000, 3000, 60000)
+	settings.AuditContentMaxRunes = normalizeIntSetting(settings.AuditContentMaxRunes, 16000, 3000, 80000)
+	settings.RevisionContentMaxRunes = normalizeIntSetting(settings.RevisionContentMaxRunes, 16000, 3000, 80000)
+	settings.FullReviewPayloadMaxRunes = normalizeIntSetting(settings.FullReviewPayloadMaxRunes, 220000, 20000, 500000)
+	settings.StyleTemplateChapterRunes = normalizeIntSetting(settings.StyleTemplateChapterRunes, 7000, 2000, 30000)
+	settings.StyleTemplateObservationsMaxRunes = normalizeIntSetting(settings.StyleTemplateObservationsMaxRunes, 70000, 10000, 200000)
+	settings.MaterialRawMaxRunes = normalizeIntSetting(settings.MaterialRawMaxRunes, 4000, 1000, 20000)
+	settings.MaterialCharacterMaxRunes = normalizeIntSetting(settings.MaterialCharacterMaxRunes, 6000, 1000, 30000)
+	settings.MaterialWorldMaxRunes = normalizeIntSetting(settings.MaterialWorldMaxRunes, 5000, 1000, 30000)
+	settings.MaterialConflictMaxRunes = normalizeIntSetting(settings.MaterialConflictMaxRunes, 5000, 1000, 30000)
+	settings.PromptCardLimit = normalizeIntSetting(settings.PromptCardLimit, 40, 5, 200)
+	settings.PromptCardNameMaxRunes = normalizeIntSetting(settings.PromptCardNameMaxRunes, 120, 20, 500)
+	settings.PromptCardDescriptionMaxRunes = normalizeIntSetting(settings.PromptCardDescriptionMaxRunes, 500, 80, 3000)
+	settings.PromptQuestionMaxRunes = normalizeIntSetting(settings.PromptQuestionMaxRunes, 300, 80, 2000)
+	settings.OutlineInitialBatchSize = normalizeIntSetting(settings.OutlineInitialBatchSize, 1, 1, 10)
+	settings.OutlineBatchSize = normalizeIntSetting(settings.OutlineBatchSize, 5, 1, 20)
+	settings.OutlineSmallBatchMaxTokens = normalizeIntSetting(settings.OutlineSmallBatchMaxTokens, 9000, 3000, 60000)
+	settings.OutlineMediumBatchMaxTokens = normalizeIntSetting(settings.OutlineMediumBatchMaxTokens, 18000, 6000, 90000)
+	settings.OutlineLargeBatchMaxTokens = normalizeIntSetting(settings.OutlineLargeBatchMaxTokens, 30000, 9000, 120000)
+	settings.BatchRetryAttempts = normalizeIntSetting(settings.BatchRetryAttempts, 3, 1, 10)
+	settings.OutlineWaitTimeoutMinutes = normalizeIntSetting(settings.OutlineWaitTimeoutMinutes, 15, 1, 120)
+	settings.RuntimePollingIntervalMs = normalizeIntSetting(settings.RuntimePollingIntervalMs, 1500, 500, 10000)
+	settings.OutlinePollingIntervalMs = normalizeIntSetting(settings.OutlinePollingIntervalMs, 5000, 1000, 30000)
+	settings.FinishedTaskRetentionMinutes = normalizeIntSetting(settings.FinishedTaskRetentionMinutes, 10, 1, 120)
+	settings.StyleTemplateRetryAttempts = normalizeIntSetting(settings.StyleTemplateRetryAttempts, 3, 1, 10)
 	return settings
+}
+
+func normalizeIntSetting(value int, fallback int, minValue int, maxValue int) int {
+	if value <= 0 {
+		value = fallback
+	}
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 func loadNovelWriterGeneralSettings() NovelWriterGeneralSettings {
@@ -330,6 +403,7 @@ func generateStyleTemplateFromNovel(
 	req generateStyleTemplateRequest,
 	chapterSegments []textChapterSegment,
 ) error {
+	general := loadNovelWriterGeneralSettings()
 	observations := make([]chapterStyleObservation, 0, len(chapterSegments))
 	system := "你是小说文风分析师。你只提炼抽象文风规律，不复述具体情节，不模仿原句。请只输出 JSON。"
 
@@ -348,12 +422,12 @@ func generateStyleTemplateFromNovel(
 {"chapter_title":"","summary":"","narration":"","sentence":"","dialogue":"","rhythm":"","techniques":[""],"avoid_rules":[""]}
 
 章节标题：%s
-章节正文：%s`, chapter.Title, truncateForAI(chapter.Content, 7000))
+章节正文：%s`, chapter.Title, truncateForAI(chapter.Content, general.StyleTemplateChapterRunes))
 
 		var observation chapterStyleObservation
 		if err := retryStyleTemplateAI(ctx, func() error {
-			return callNovelAIJSONWithTimeoutContext(ctx, system, user, &observation, 0, 120*time.Second)
-		}, 3); err != nil {
+			return callNovelAIJSONWithTimeoutContext(ctx, system, user, &observation, 0, time.Duration(general.StyleTemplateChapterTimeoutSeconds)*time.Second)
+		}, general.StyleTemplateRetryAttempts); err != nil {
 			task.update(fmt.Sprintf("文风模版生成 %d/%d 章（已跳过失败章节）", index+1, len(chapterSegments)), "running")
 			continue
 		}
@@ -375,7 +449,7 @@ func generateStyleTemplateFromNovel(
 	content := ""
 	result := NovelStyleTemplate{}
 	observationsJSON := mustJSON(observations)
-	if len([]rune(observationsJSON)) <= 70000 {
+	if len([]rune(observationsJSON)) <= general.StyleTemplateObservationsMaxRunes {
 		aggregateSystem := "你是资深小说文风总编。请把分章文风观察汇总成一份可复用的高质量文风模版，只输出 JSON。"
 		aggregateUser := fmt.Sprintf(`请基于整本参考小说的逐章文风观察，生成一份精华版文风模版。
 要求：
@@ -390,7 +464,7 @@ func generateStyleTemplateFromNovel(
 用户预设描述：%s
 逐章文风观察：%s`, req.Name, req.Description, observationsJSON)
 
-		if err := callNovelAIJSONWithTimeoutContext(ctx, aggregateSystem, aggregateUser, &result, 0, 180*time.Second); err == nil {
+		if err := callNovelAIJSONWithTimeoutContext(ctx, aggregateSystem, aggregateUser, &result, 0, time.Duration(general.StyleTemplateSummaryTimeoutSeconds)*time.Second); err == nil {
 			content = strings.TrimSpace(result.Content)
 		} else {
 			task.update("文风模版汇总失败，正在使用逐章观察兜底", "running")
