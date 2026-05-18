@@ -150,13 +150,28 @@ const triggerChapterGeneration = (outlineId: string) => {
   emit('generate', outlineId)
 }
 
+const isFullReviewRevisionVersion = (version?: { type?: string; reason?: string } | null) => {
+  const type = String(version?.type || '').trim()
+  const reason = String(version?.reason || '').trim()
+  return type === 'full_review_revision' || reason.includes('全文质量核验') || reason.includes('全文核验') || reason.includes('全文修订')
+}
+
 const formatVersionType = (type: string) => {
   if (type === 'draft') return '初稿版'
+  if (type === 'full_review_revision') return '全文精修版'
   if (type === 'revision') return '修订版'
   return type || '未标记版本'
 }
 
+const formatVersionLabel = (version?: { type?: string; reason?: string } | null) => {
+  if (isFullReviewRevisionVersion(version)) return '全文精修版'
+  return formatVersionType(version?.type || '')
+}
+
 const currentVersionLabel = computed(() => {
+  const chapter = selectedChapter.value
+  const version = chapter?.versions?.find((item) => item.id === activeVersionId.value)
+  if (version) return `当前版本（当前使用：${formatVersionLabel(version)}）`
   const type = currentVersionType.value
   return type ? `当前版本（当前使用：${formatVersionType(type)}）` : '当前版本'
 })
@@ -178,6 +193,7 @@ const canAdoptDisplayedVersion = computed(() => {
 })
 
 const isCurrentVersionView = computed(() => !previewVersionId.value)
+const displayedWordCount = computed(() => Array.from(String(previewContent.value || '').replace(/\s+/g, '')).length)
 
 const adoptDisplayedVersion = () => {
   if (!selectedChapter.value || !displayedVersionId.value) return
@@ -267,7 +283,12 @@ const buildSequenceDiff = (source: string[], target: string[]) => {
 }
 
 const revisionDiff = computed(() => {
-  if (!previewVersionId.value || displayedVersionType.value !== 'revision' || !draftVersion.value || !displayedVersion.value) {
+  if (
+    !previewVersionId.value
+    || !['revision', 'full_review_revision'].includes(displayedVersionType.value)
+    || !draftVersion.value
+    || !displayedVersion.value
+  ) {
     return null
   }
 
@@ -470,12 +491,13 @@ watch(
             :class="['version-chip', { 'version-chip--active': previewVersionId === version.id }]"
             @click="previewVersionId = version.id"
           >
-            {{ formatVersionType(version.type) }} · {{ version.created_at }}
+            {{ formatVersionLabel(version) }} · {{ version.created_at }}
           </button>
         </div>
 
         <div class="chapter-content-shell">
           <div class="chapter-version-floating">
+            <span class="chapter-word-count">当前 {{ displayedWordCount }} 字</span>
             <template v-if="isCurrentVersionView">
               <div v-if="isManualEditing" class="chapter-version-edit-actions">
                 <button
@@ -963,6 +985,9 @@ watch(
   top: 12px;
   right: 12px;
   z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   pointer-events: none;
 }
 
@@ -974,7 +999,8 @@ watch(
 
 .chapter-version-adopt-btn,
 .chapter-version-adopt-badge,
-.chapter-version-secondary-btn {
+.chapter-version-secondary-btn,
+.chapter-word-count {
   display: inline-flex;
   align-items: center;
   min-height: 32px;
@@ -982,6 +1008,12 @@ watch(
   border-radius: 999px;
   font-size: 12px;
   font-weight: 800;
+}
+
+.chapter-word-count {
+  background: rgba(15, 23, 42, 0.72);
+  color: #cbd5e1;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.16);
 }
 
 .chapter-version-adopt-btn {

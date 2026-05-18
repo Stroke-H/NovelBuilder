@@ -7,13 +7,13 @@
           <div class="header-info">
             <div class="title-row">
               <h3 class="panel-title">文风生成准备</h3>
-              <span :class="['reference-status', { 'reference-status--ready': hasReference }]">
+              <span :class="['reference-status', { 'reference-status--ready': hasReference || hasStyleProfile }]">
                 <span class="status-dot"></span>
-                {{ hasReference ? '已提供参考' : '无参考' }}
+                {{ profileStatusText }}
               </span>
             </div>
             <p class="panel-desc">
-              文风参考并非必填；如果留空，AI 会根据题材自动匹配最合适的创作风格。
+              {{ panelDescription }}
             </p>
           </div>
         </div>
@@ -107,7 +107,7 @@
 import { computed, reactive, shallowRef, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import { DocumentChecked, EditPen, MagicStick, Memo, InfoFilled, Upload } from '@element-plus/icons-vue'
-import type { NovelMaterials, NovelStyleTemplate } from '@/api/novelWriter'
+import type { NovelMaterials, NovelStyleProfile, NovelStyleTemplate } from '@/api/novelWriter'
 
 const props = defineProps<{
   modelValue: NovelMaterials
@@ -117,6 +117,7 @@ const props = defineProps<{
   pipelineLoading: boolean
   pipelineLabel?: string
   styleTemplates: NovelStyleTemplate[]
+  styleProfile: NovelStyleProfile
 }>()
 
 const emit = defineEmits<{
@@ -132,6 +133,27 @@ const referenceDialogVisible = shallowRef(false)
 const referenceDraft = shallowRef('')
 const selectedTemplateId = shallowRef('')
 const hasReference = computed(() => Boolean(form.reference_raw.trim()))
+const hasStyleProfile = computed(() => Boolean(
+  props.styleProfile?.summary
+  || props.styleProfile?.narration
+  || props.styleProfile?.sentence
+  || props.styleProfile?.dialogue
+  || props.styleProfile?.rhythm
+  || props.styleProfile?.do_rules?.length
+  || props.styleProfile?.avoid_rules?.length
+))
+const profileStatusText = computed(() => {
+  if (hasStyleProfile.value) return '画像已生成'
+  return hasReference.value ? '已提供参考' : '无参考'
+})
+const panelDescription = computed(() => {
+  if (hasStyleProfile.value) {
+    return props.styleProfile.summary
+      || props.styleProfile.narration
+      || '文风画像已生成，将用于后续大纲和正文生成。'
+  }
+  return '文风参考并非必填；如果留空，AI 会根据题材自动匹配最合适的创作风格。'
+})
 
 watch(
   () => props.modelValue,

@@ -24,14 +24,26 @@ type NovelStyleTemplate struct {
 	UpdatedAt   string `json:"updated_at"`
 }
 
+type NovelWriterGeneralSettings struct {
+	MaxChapters     int `json:"max_chapters"`
+	MaxChapterWords int `json:"max_chapter_words"`
+}
+
 type NovelWriterLocalSettings struct {
-	StyleTemplates []NovelStyleTemplate `json:"style_templates"`
+	General        NovelWriterGeneralSettings `json:"general"`
+	StyleTemplates []NovelStyleTemplate       `json:"style_templates"`
 }
 
 type NovelWriterSettingsPayload struct {
-	AIConfig       feishumodel.AIConfig `json:"ai_config"`
-	StyleTemplates []NovelStyleTemplate `json:"style_templates"`
+	AIConfig       feishumodel.AIConfig       `json:"ai_config"`
+	General        NovelWriterGeneralSettings `json:"general"`
+	StyleTemplates []NovelStyleTemplate       `json:"style_templates"`
 }
+
+const (
+	defaultNovelMaxChapters     = 200
+	defaultNovelMaxChapterWords = 80000
+)
 
 type generateStyleTemplateRequest struct {
 	Name        string `json:"name"`
@@ -63,13 +75,17 @@ func UpdateNovelWriterSettingsHandler(c *gin.Context) {
 
 	req.AIConfig.ProviderGroups = normalizeAIProviderGroups(req.AIConfig.ProviderGroups)
 	req.AIConfig.Providers = normalizeAIProviders(req.AIConfig.Providers)
+	req.General = normalizeNovelWriterGeneralSettings(req.General)
 	req.StyleTemplates = normalizeStyleTemplates(req.StyleTemplates)
 
 	if err := feishumodel.SaveAIConfig(&req.AIConfig); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if err := saveNovelWriterLocalSettings(NovelWriterLocalSettings{StyleTemplates: req.StyleTemplates}); err != nil {
+	if err := saveNovelWriterLocalSettings(NovelWriterLocalSettings{
+		General:        req.General,
+		StyleTemplates: req.StyleTemplates,
+	}); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -104,13 +120,15 @@ func GenerateStyleTemplateHandler(c *gin.Context) {
 	taskCtx, task := beginNovelRuntimeTask(settingsProject, "style_template_generate", "文风模版生成 0/"+fmt.Sprintf("%d", len(chapterSegments))+" 章")
 
 	go func() {
-		defer task.finish()
 		if err := generateStyleTemplateFromNovel(taskCtx, task, req, chapterSegments); err != nil {
 			if isContextCanceledError(err) {
+				task.complete("cancelled", "文风模版生成已终止", "")
 				return
 			}
-			task.update("文风模版生成失败", "cancelling")
+			task.complete("failed", "文风模版生成失败", err.Error())
+			return
 		}
+		task.complete("completed", "文风模版生成完成", "")
 	}()
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -136,8 +154,39 @@ func loadNovelWriterSettingsPayload() (NovelWriterSettingsPayload, error) {
 
 	return NovelWriterSettingsPayload{
 		AIConfig:       *config,
+		General:        localSettings.General,
 		StyleTemplates: localSettings.StyleTemplates,
 	}, nil
+}
+
+func normalizeNovelWriterGeneralSettings(settings NovelWriterGeneralSettings) NovelWriterGeneralSettings {
+	if settings.MaxChapters <= 0 {
+		settings.MaxChapters = defaultNovelMaxChapters
+	}
+	if settings.MaxChapters < 1 {
+		settings.MaxChapters = 1
+	}
+	if settings.MaxChapters > 1000 {
+		settings.MaxChapters = 1000
+	}
+	if settings.MaxChapterWords <= 0 {
+		settings.MaxChapterWords = defaultNovelMaxChapterWords
+	}
+	if settings.MaxChapterWords < 1200 {
+		settings.MaxChapterWords = 1200
+	}
+	if settings.MaxChapterWords > 200000 {
+		settings.MaxChapterWords = 200000
+	}
+	return settings
+}
+
+func loadNovelWriterGeneralSettings() NovelWriterGeneralSettings {
+	settings, err := loadNovelWriterLocalSettings()
+	if err != nil {
+		return normalizeNovelWriterGeneralSettings(NovelWriterGeneralSettings{})
+	}
+	return normalizeNovelWriterGeneralSettings(settings.General)
 }
 
 func normalizeAIProviderGroups(groups []feishumodel.AIProviderGroupConfig) []feishumodel.AIProviderGroupConfig {
@@ -234,7 +283,10 @@ func loadNovelWriterLocalSettings() (NovelWriterLocalSettings, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return NovelWriterLocalSettings{}, nil
+			return NovelWriterLocalSettings{
+				General:        normalizeNovelWriterGeneralSettings(NovelWriterGeneralSettings{}),
+				StyleTemplates: []NovelStyleTemplate{},
+			}, nil
 		}
 		return NovelWriterLocalSettings{}, err
 	}
@@ -242,11 +294,13 @@ func loadNovelWriterLocalSettings() (NovelWriterLocalSettings, error) {
 	if err := json.Unmarshal(data, &settings); err != nil {
 		return NovelWriterLocalSettings{}, err
 	}
+	settings.General = normalizeNovelWriterGeneralSettings(settings.General)
 	settings.StyleTemplates = normalizeStyleTemplates(settings.StyleTemplates)
 	return settings, nil
 }
 
 func saveNovelWriterLocalSettings(settings NovelWriterLocalSettings) error {
+	settings.General = normalizeNovelWriterGeneralSettings(settings.General)
 	settings.StyleTemplates = normalizeStyleTemplates(settings.StyleTemplates)
 	path := novelWriterSettingsPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -297,8 +351,11 @@ func generateStyleTemplateFromNovel(
 章节正文：%s`, chapter.Title, truncateForAI(chapter.Content, 7000))
 
 		var observation chapterStyleObservation
-		if err := callNovelAIJSONWithTimeoutContext(ctx, system, user, &observation, 0, 120*time.Second); err != nil {
-			return err
+		if err := retryStyleTemplateAI(ctx, func() error {
+			return callNovelAIJSONWithTimeoutContext(ctx, system, user, &observation, 0, 120*time.Second)
+		}, 3); err != nil {
+			task.update(fmt.Sprintf("文风模版生成 %d/%d 章（已跳过失败章节）", index+1, len(chapterSegments)), "running")
+			continue
 		}
 		if strings.TrimSpace(observation.ChapterTitle) == "" {
 			observation.ChapterTitle = chapter.Title
@@ -306,13 +363,21 @@ func generateStyleTemplateFromNovel(
 		observations = append(observations, observation)
 	}
 
+	if len(observations) == 0 {
+		return fmt.Errorf("所有章节文风提炼均失败，未生成可汇总内容")
+	}
+
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
 
 	task.update("文风模版汇总中", "running")
-	aggregateSystem := "你是资深小说文风总编。请把分章文风观察汇总成一份可复用的高质量文风模版，只输出 JSON。"
-	aggregateUser := fmt.Sprintf(`请基于整本参考小说的逐章文风观察，生成一份精华版文风模版。
+	content := ""
+	result := NovelStyleTemplate{}
+	observationsJSON := mustJSON(observations)
+	if len([]rune(observationsJSON)) <= 70000 {
+		aggregateSystem := "你是资深小说文风总编。请把分章文风观察汇总成一份可复用的高质量文风模版，只输出 JSON。"
+		aggregateUser := fmt.Sprintf(`请基于整本参考小说的逐章文风观察，生成一份精华版文风模版。
 要求：
 1. 输出内容必须是抽象风格规则，不要保留原作专属设定、情节、人物名称或原句。
 2. description 用一句话概括该模版适合的风格。
@@ -323,14 +388,17 @@ func generateStyleTemplateFromNovel(
 
 用户预设名称：%s
 用户预设描述：%s
-逐章文风观察：%s`, req.Name, req.Description, mustJSON(observations))
+逐章文风观察：%s`, req.Name, req.Description, observationsJSON)
 
-	var result NovelStyleTemplate
-	if err := callNovelAIJSONWithTimeoutContext(ctx, aggregateSystem, aggregateUser, &result, 0, 180*time.Second); err != nil {
-		return err
+		if err := callNovelAIJSONWithTimeoutContext(ctx, aggregateSystem, aggregateUser, &result, 0, 180*time.Second); err == nil {
+			content = strings.TrimSpace(result.Content)
+		} else {
+			task.update("文风模版汇总失败，正在使用逐章观察兜底", "running")
+		}
+	} else {
+		task.update("逐章观察过长，正在使用本地压缩汇总", "running")
 	}
 
-	content := strings.TrimSpace(result.Content)
 	if content == "" {
 		content = buildFallbackStyleTemplateContent(observations)
 	}
@@ -359,7 +427,10 @@ func generateStyleTemplateFromNovel(
 		UpdatedAt:   now,
 	}
 	settings.StyleTemplates = append([]NovelStyleTemplate{template}, normalizeStyleTemplates(settings.StyleTemplates)...)
-	return saveNovelWriterLocalSettings(NovelWriterLocalSettings{StyleTemplates: settings.StyleTemplates})
+	return saveNovelWriterLocalSettings(NovelWriterLocalSettings{
+		General:        settings.General,
+		StyleTemplates: settings.StyleTemplates,
+	})
 }
 
 func buildFallbackStyleTemplateDescription(observations []chapterStyleObservation) string {
@@ -381,6 +452,24 @@ func buildFallbackStyleTemplateDescription(observations []chapterStyleObservatio
 		return "由整本参考小说逐章提炼生成"
 	}
 	return strings.Join(summaries, "；")
+}
+
+func retryStyleTemplateAI(ctx context.Context, action func() error, maxAttempts int) error {
+	if maxAttempts <= 0 {
+		maxAttempts = 3
+	}
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if err := action(); err != nil {
+			lastErr = err
+			continue
+		}
+		return nil
+	}
+	return lastErr
 }
 
 func buildFallbackStyleTemplateContent(observations []chapterStyleObservation) string {

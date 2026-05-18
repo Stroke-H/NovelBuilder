@@ -16,7 +16,8 @@ const emit = defineEmits<{
 
 const open = shallowRef(false)
 
-const runningCount = computed(() => props.tasks.length)
+const isTaskActive = (task: NovelRuntimeTask) => task.status === 'running' || task.status === 'cancelling'
+const runningCount = computed(() => props.tasks.filter(isTaskActive).length)
 
 const panelTitle = computed(() => {
   if (runningCount.value === 0) return '后台任务'
@@ -25,6 +26,9 @@ const panelTitle = computed(() => {
 
 const statusText = (status: string) => {
   if (status === 'cancelling') return '终止中'
+  if (status === 'completed') return '已完成'
+  if (status === 'failed') return '失败'
+  if (status === 'cancelled') return '已终止'
   return '执行中'
 }
 
@@ -53,24 +57,25 @@ const toggleOpen = () => {
             <article
               v-for="task in tasks"
               :key="task.id"
-              class="task-item"
+              :class="['task-item', `task-item--${task.status}`]"
             >
               <div class="task-item__meta">
                 <span class="task-item__status">{{ statusText(task.status) }}</span>
-                <span class="task-item__time">{{ task.started_at }}</span>
+                <span class="task-item__time">{{ task.finished_at || task.started_at }}</span>
               </div>
               <strong class="task-item__title">{{ task.title }}</strong>
               <p v-if="task.project_title" class="task-item__project">{{ task.project_title }}</p>
+              <p v-if="task.error" class="task-item__error">{{ task.error }}</p>
               <div class="task-item__actions">
                 <el-button
                   size="small"
                   type="danger"
                   plain
                   :loading="cancelLoadingTaskId === task.id"
-                  :disabled="task.status === 'cancelling'"
+                  :disabled="!isTaskActive(task) || task.status === 'cancelling'"
                   @click="emit('cancel', task.id)"
                 >
-                  {{ task.status === 'cancelling' ? '终止中' : '结束进程' }}
+                  {{ isTaskActive(task) ? (task.status === 'cancelling' ? '终止中' : '结束进程') : '已结束' }}
                 </el-button>
               </div>
             </article>
@@ -235,6 +240,18 @@ const toggleOpen = () => {
   font-weight: 700;
 }
 
+.task-item--completed .task-item__status {
+  color: #16a34a;
+}
+
+.task-item--failed .task-item__status {
+  color: #dc2626;
+}
+
+.task-item--cancelled .task-item__status {
+  color: #64748b;
+}
+
 .task-item__title {
   color: #0f172a;
   font-size: 15px;
@@ -244,6 +261,17 @@ const toggleOpen = () => {
   margin: 0;
   color: #475569;
   font-size: 13px;
+}
+
+.task-item__error {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fef2f2;
+  color: #b91c1c;
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-word;
 }
 
 .task-item__actions {

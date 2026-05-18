@@ -43,6 +43,7 @@ const activeStep = shallowRef<'materials' | 'generation'>('materials')
 const insightsOpen = shallowRef(false)
 const generationVisited = shallowRef(false)
 const materialInsightsImported = shallowRef(false)
+const styleProfileSuppressedByMaterialImport = shallowRef(false)
 const materialInsightsSnapshot = shallowRef<NovelExtractedInfo | null>(null)
 const materialPanelRef = shallowRef<InstanceType<typeof NovelMaterialPanel> | null>(null)
 const outlinePollingTimer = shallowRef<number | undefined>()
@@ -66,6 +67,13 @@ const pipelineLoading = shallowRef(false)
 const pipelineLabel = shallowRef('AI一条龙')
 const writerSettings = shallowRef<NovelWriterSettings>(emptyNovelWriterSettings())
 
+const normalizeWriterGeneralSettings = (settings?: NovelWriterSettings['general']) => ({
+  max_chapters: Math.min(Math.max(Number(settings?.max_chapters) || 200, 1), 1000),
+  max_chapter_words: Math.min(Math.max(Number(settings?.max_chapter_words) || 80000, 1200), 200000)
+})
+
+const writerGeneralSettings = computed(() => normalizeWriterGeneralSettings(writerSettings.value.general))
+
 const workspaceSwitchItemClass = (step: 'materials' | 'generation') => [
   'workspace-switch__item',
   { 'workspace-switch__item--active': activeStep.value === step }
@@ -78,6 +86,26 @@ const createForm = reactive<CreateNovelProjectPayload>({
   target_chapters: 30,
   materials: emptyNovelMaterials()
 })
+
+const createTargetWordsMax = computed(() => (
+  Math.max(1000, createForm.target_chapters * writerGeneralSettings.value.max_chapter_words)
+))
+
+const clampCreateFormTargets = () => {
+  const general = writerGeneralSettings.value
+  if (createForm.target_chapters > general.max_chapters) {
+    createForm.target_chapters = general.max_chapters
+  }
+  if (createForm.target_chapters < 1) {
+    createForm.target_chapters = 1
+  }
+  if (createForm.target_words > createTargetWordsMax.value) {
+    createForm.target_words = createTargetWordsMax.value
+  }
+  if (createForm.target_words < 1000) {
+    createForm.target_words = 1000
+  }
+}
 
 const selectedChapter = computed(() => {
   const chapters = selectedProject.value?.chapters || []
@@ -263,7 +291,7 @@ const displayExtracted = computed<NovelExtractedInfo>(() => {
 })
 
 const displayStyleProfile = computed<NovelStyleProfile>(() => {
-  if (materialInsightsImported.value) {
+  if (styleProfileSuppressedByMaterialImport.value) {
     return {
       summary: '',
       narration: '',
@@ -300,7 +328,9 @@ const displayStyleProfile = computed<NovelStyleProfile>(() => {
 })
 
 const styleTemplates = computed(() => writerSettings.value.style_templates || [])
-const styleTemplateGenerationTask = computed(() => runtimeTasks.value.find((task) => task.kind === 'style_template_generate') || null)
+const isRuntimeTaskActive = (task: NovelRuntimeTask) => task.status === 'running' || task.status === 'cancelling'
+const styleTemplateLatestTask = computed(() => runtimeTasks.value.find((task) => task.kind === 'style_template_generate') || null)
+const styleTemplateGenerationTask = computed(() => runtimeTasks.value.find((task) => task.kind === 'style_template_generate' && isRuntimeTaskActive(task)) || null)
 const styleTemplateGenerationLoading = computed(() => Boolean(styleTemplateGenerationTask.value))
 const styleTemplateGenerationLabel = computed(() => styleTemplateGenerationTask.value?.title || '整本小说提炼中')
 
@@ -344,7 +374,7 @@ const outlineProgress = (outline?: NovelOutline | null) => {
 }
 
 const hasActiveRuntimeTask = (projectId: string, kind: string) => {
-  return runtimeTasks.value.some((task) => task.project_id === projectId && task.kind === kind)
+  return runtimeTasks.value.some((task) => task.project_id === projectId && task.kind === kind && isRuntimeTaskActive(task))
 }
 
 const normalizeStaleOutlineProject = (project: NovelProject) => {
@@ -473,6 +503,7 @@ const selectProject = (project: NovelProject) => {
   activeStep.value = 'materials'
   generationVisited.value = false
   materialInsightsImported.value = false
+  styleProfileSuppressedByMaterialImport.value = false
   materialInsightsSnapshot.value = null
   if (normalizedProject.outline?.generation_status === 'generating' && hasActiveRuntimeTask(normalizedProject.id, 'outline')) {
     startOutlinePolling(normalizedProject.id)
@@ -492,12 +523,14 @@ const backToProjectList = () => {
   insightsOpen.value = false
   generationVisited.value = false
   materialInsightsImported.value = false
+  styleProfileSuppressedByMaterialImport.value = false
   materialInsightsSnapshot.value = null
 }
 
 const importMaterialsToInsights = () => {
   materialInsightsSnapshot.value = buildMaterialExtracted(currentMaterials.value, false)
   materialInsightsImported.value = true
+  styleProfileSuppressedByMaterialImport.value = true
   insightsOpen.value = true
   ElMessage.success('素材图谱内容已带入，灵感卡片未带入')
 }
@@ -507,9 +540,13 @@ const createProject = async () => {
     ElMessage.warning('请先填写小说名称')
     return
   }
+  clampCreateFormTargets()
   saving.value = true
   try {
-    const project = await novelWriterApi.createProject(createForm)
+    const project = await novelWriterApi.createProject({
+      ...createForm,
+      materials: { ...createForm.materials }
+    })
     projects.value = [project, ...projects.value]
     selectProject(project)
     createDialogVisible.value = false
@@ -520,6 +557,7 @@ const createProject = async () => {
       target_chapters: 30,
       materials: emptyNovelMaterials()
     })
+    clampCreateFormTargets()
     ElMessage.success('小说项目已创建')
   } catch (error) {
     ElMessage.error(`创建失败：${getErrorMessage(error)}`)
@@ -593,7 +631,11 @@ watch(
     if (!styleTemplateTaskWasActive.value) return
     styleTemplateTaskWasActive.value = false
     await loadWriterSettings(true)
-    if (styleTemplateTaskLastStatus.value === 'cancelling') {
+    const latestTask = styleTemplateLatestTask.value
+    const latestStatus = latestTask?.status || styleTemplateTaskLastStatus.value
+    if (latestStatus === 'failed') {
+      ElMessage.error(`文风模版提炼失败：${latestTask?.error || '请展开后台任务查看原因'}`)
+    } else if (latestStatus === 'cancelled' || latestStatus === 'cancelling') {
       ElMessage.info('文风模版提炼任务已终止')
     } else {
       ElMessage.success('文风模版提炼已完成，书架已刷新')
@@ -607,6 +649,12 @@ watch(
   (status) => {
     if (status) styleTemplateTaskLastStatus.value = status
   }
+)
+
+watch(
+  [writerGeneralSettings, () => createForm.target_chapters],
+  clampCreateFormTargets,
+  { immediate: true }
 )
 
 const saveCurrentProject = async () => {
@@ -683,10 +731,17 @@ const planOutline = async () => {
   }
 }
 
-const analyzeStyle = () => runProjectAction('style', '文风画像', async () => {
-  await saveBeforeAIAction()
-  return novelWriterApi.analyzeStyle(selectedProject.value!.id)
-})
+const analyzeStyle = async () => {
+  const project = await runProjectAction('style', '文风画像', async () => {
+    await saveBeforeAIAction()
+    return novelWriterApi.analyzeStyle(selectedProject.value!.id)
+  })
+  if (project) {
+    styleProfileSuppressedByMaterialImport.value = false
+    insightsOpen.value = true
+  }
+  return project
+}
 
 const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms))
 
@@ -1193,6 +1248,8 @@ const runAiPipeline = async () => {
     if (fullReviewNeedsRevision(reviewedProject?.full_review)) {
       pipelineLabel.value = 'AI一条龙 · 全文修订'
       await reviseNovelByFullReview(true)
+      pipelineLabel.value = 'AI一条龙 · 复审精修章节'
+      await auditAllChapters(true)
     }
 
     pipelineLabel.value = 'AI一条龙 · 确认章节'
@@ -1346,6 +1403,7 @@ onBeforeUnmount(stopRuntimeTaskPolling)
             :pipeline-loading="pipelineLoading"
             :pipeline-label="pipelineLabel"
             :style-templates="styleTemplates"
+            :style-profile="selectedProject.style_profile"
             @save="saveCurrentProject"
             @outline="planOutline"
             @style="analyzeStyle"
@@ -1431,10 +1489,10 @@ onBeforeUnmount(stopRuntimeTaskPolling)
         </el-form-item>
         <div class="dialog-grid">
           <el-form-item label="目标字数">
-            <el-input-number v-model="createForm.target_words" :min="1000" :step="10000" />
+            <el-input-number v-model="createForm.target_words" :min="1000" :max="createTargetWordsMax" :step="10000" />
           </el-form-item>
           <el-form-item label="目标章节数">
-            <el-input-number v-model="createForm.target_chapters" :min="1" :step="1" />
+            <el-input-number v-model="createForm.target_chapters" :min="1" :max="writerGeneralSettings.max_chapters" :step="1" />
           </el-form-item>
         </div>
       </el-form>

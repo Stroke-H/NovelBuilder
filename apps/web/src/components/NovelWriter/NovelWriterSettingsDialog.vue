@@ -22,6 +22,7 @@ const emit = defineEmits<{
 const normalizeSettings = (value?: NovelWriterSettings | null): NovelWriterSettings => {
   const source = value || {} as NovelWriterSettings
   const aiConfig = source.ai_config || {} as NovelWriterSettings['ai_config']
+  const general = source.general || {} as NovelWriterSettings['general']
   return {
     ai_config: {
       deepseek_api_key: aiConfig.deepseek_api_key || '',
@@ -50,6 +51,10 @@ const normalizeSettings = (value?: NovelWriterSettings | null): NovelWriterSetti
           capability: provider?.capability || 'chat'
         }))
         : []
+    },
+    general: {
+      max_chapters: Math.min(Math.max(Number(general.max_chapters) || 200, 1), 1000),
+      max_chapter_words: Math.min(Math.max(Number(general.max_chapter_words) || 80000, 1200), 200000)
     },
     style_templates: Array.isArray(source.style_templates)
       ? source.style_templates.map((template) => ({
@@ -230,6 +235,39 @@ const saveSettings = () => {
   >
     <div v-loading="loading" class="writer-settings">
       <el-tabs class="writer-settings__tabs">
+        <el-tab-pane label="常规设置">
+          <div class="settings-block">
+            <div class="settings-block__head">
+              <div>
+                <h4>小说生成上限</h4>
+                <p>用于限制新建小说、生成大纲和单章正文目标，避免误填超大数值导致生成链路失控。</p>
+              </div>
+            </div>
+            <div class="settings-grid settings-grid--double">
+              <label class="settings-field">
+                <span>小说章节数量最大值</span>
+                <el-input-number
+                  v-model="draft.general.max_chapters"
+                  :min="1"
+                  :max="1000"
+                  :step="1"
+                  controls-position="right"
+                />
+              </label>
+              <label class="settings-field">
+                <span>单章节字数最大值</span>
+                <el-input-number
+                  v-model="draft.general.max_chapter_words"
+                  :min="1200"
+                  :max="200000"
+                  :step="1000"
+                  controls-position="right"
+                />
+              </label>
+            </div>
+          </div>
+        </el-tab-pane>
+
         <el-tab-pane label="API Key 配置">
           <div class="settings-block">
             <div class="settings-block__head">
@@ -536,6 +574,18 @@ const saveSettings = () => {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.settings-field {
+  display: grid;
+  gap: 8px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.settings-field :deep(.el-input-number) {
+  width: 100%;
+}
+
 .settings-stack {
   display: grid;
   gap: 14px;
@@ -589,7 +639,8 @@ const saveSettings = () => {
 }
 
 .template-card-shell {
-  min-height: 291px;
+  height: 291px;
+  min-width: 0;
 }
 
 .template-card {
@@ -597,14 +648,14 @@ const saveSettings = () => {
   display: flex;
   flex-direction: column;
   width: 100%;
-  min-height: 291px;
+  height: 100%;
   padding: 0;
   border: 0;
   border-radius: 10px;
   background: #eef2f6;
   text-align: left;
   cursor: pointer;
-  overflow: visible;
+  overflow: hidden;
   color: #64748b;
   transition: 0.2s ease;
 }
@@ -617,7 +668,8 @@ const saveSettings = () => {
 .template-card__hero {
   position: relative;
   display: flex;
-  min-height: 220px;
+  height: 220px;
+  min-height: 0;
   padding: 28px 28px 0 28px;
   background: #f6a3ab;
   border-radius: 10px 10px 0 0;
@@ -693,13 +745,22 @@ const saveSettings = () => {
   display: block;
   font-size: 24px;
   line-height: 1.25;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
   word-break: break-word;
 }
 
 .template-card__body {
+  display: grid;
+  grid-template-rows: auto auto auto 1fr auto;
+  align-content: start;
   min-width: 0;
   flex: 1;
   padding-left: 22px;
+  max-height: 180px;
+  overflow: hidden;
 }
 
 .template-card__title {
@@ -708,6 +769,11 @@ const saveSettings = () => {
   color: #0f172a;
   font-size: 22px;
   line-height: 1.2;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
 }
 
 .template-card__subtitle,
@@ -720,9 +786,18 @@ const saveSettings = () => {
 
 .template-card__summary {
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  word-break: break-word;
+}
+
+.template-card__subtitle {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
 }
 
 .template-card__stats {
@@ -730,6 +805,8 @@ const saveSettings = () => {
   flex-wrap: wrap;
   gap: 10px;
   margin-top: 12px;
+  max-height: 26px;
+  overflow: hidden;
 }
 
 .template-card__stats span {
@@ -745,7 +822,7 @@ const saveSettings = () => {
 }
 
 .template-card__cta {
-  margin-top: 14px;
+  margin-top: 10px;
   color: #0f766e;
   font-size: 13px;
   font-weight: 800;

@@ -159,8 +159,10 @@ export interface NovelRuntimeTask {
   kind: string
   title: string
   status: string
+  error?: string
   started_at: string
   updated_at: string
+  finished_at?: string
 }
 
 export interface AIProviderModelConfig {
@@ -192,6 +194,11 @@ export interface NovelWriterAISettings {
   providers: AIProviderConfig[]
 }
 
+export interface NovelWriterGeneralSettings {
+  max_chapters: number
+  max_chapter_words: number
+}
+
 export interface NovelStyleTemplate {
   id: string
   name: string
@@ -202,6 +209,7 @@ export interface NovelStyleTemplate {
 
 export interface NovelWriterSettings {
   ai_config: NovelWriterAISettings
+  general: NovelWriterGeneralSettings
   style_templates: NovelStyleTemplate[]
 }
 
@@ -258,6 +266,10 @@ export function emptyNovelWriterSettings(): NovelWriterSettings {
       provider_groups: [],
       providers: []
     },
+    general: {
+      max_chapters: 200,
+      max_chapter_words: 80000
+    },
     style_templates: []
   }
 }
@@ -293,7 +305,7 @@ export const novelWriterApi = {
   generateChapter(projectId: string, outlineId?: string) {
     return request.post(`/novel-writer/projects/${projectId}/chapters/generate`, {
       outline_id: outlineId || ''
-    }, novelAIRequestConfig) as Promise<NovelProject>
+    }, novelLongAIRequestConfig) as Promise<NovelProject>
   },
   auditChapter(projectId: string, chapterId: string) {
     return request.post(`/novel-writer/projects/${projectId}/chapters/${chapterId}/audit`, undefined, novelAIRequestConfig) as Promise<NovelProject>

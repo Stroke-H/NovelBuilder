@@ -367,14 +367,15 @@ func CreateNovelProjectHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "title is required"})
 		return
 	}
+	targetWords, targetChapters := clampNovelProjectTargets(req.TargetWords, req.TargetChapters)
 
 	now := time.Now().Format("2006-01-02 15:04:05")
 	project := NovelProject{
 		ID:             "NOVEL-" + uuid.NewString(),
 		Title:          strings.TrimSpace(req.Title),
 		Genre:          strings.TrimSpace(req.Genre),
-		TargetWords:    req.TargetWords,
-		TargetChapters: req.TargetChapters,
+		TargetWords:    targetWords,
+		TargetChapters: targetChapters,
 		Status:         "draft",
 		CurrentStage:   "material_ready",
 		CreatedBy:      user.Username,
@@ -416,8 +417,7 @@ func UpdateNovelProjectHandler(c *gin.Context) {
 	}
 	project.Title = firstNonEmpty(strings.TrimSpace(req.Title), project.Title)
 	project.Genre = strings.TrimSpace(req.Genre)
-	project.TargetWords = req.TargetWords
-	project.TargetChapters = req.TargetChapters
+	project.TargetWords, project.TargetChapters = clampNovelProjectTargets(req.TargetWords, req.TargetChapters)
 	project.Materials = req.Materials
 	project.Extracted = req.Extracted
 	if shouldKeepPersistedOutline(project.Outline, req.Outline) {
@@ -447,6 +447,20 @@ func shouldKeepPersistedOutline(persisted NovelOutline, incoming NovelOutline) b
 		return false
 	}
 	return persisted.GenerationStatus == "generating" || persisted.GenerationStatus == "ready"
+}
+
+func clampNovelProjectTargets(targetWords int, targetChapters int) (int, int) {
+	general := loadNovelWriterGeneralSettings()
+	if targetChapters > general.MaxChapters {
+		targetChapters = general.MaxChapters
+	}
+	if targetWords > 0 && targetChapters > 0 {
+		maxTotalWords := targetChapters * general.MaxChapterWords
+		if targetWords > maxTotalWords {
+			targetWords = maxTotalWords
+		}
+	}
+	return targetWords, targetChapters
 }
 
 func clampNovelAuditScore(value int) int {
@@ -620,8 +634,12 @@ func PlanNovelOutlineHandler(c *gin.Context) {
 	}
 	taskCtx, task := beginNovelRuntimeTask(project, "outline", "大纲生成")
 	chapterCount := project.TargetChapters
+	general := loadNovelWriterGeneralSettings()
+	if chapterCount > general.MaxChapters {
+		chapterCount = general.MaxChapters
+	}
 	if chapterCount <= 0 {
-		chapterCount = 8
+		chapterCount = minInt(8, general.MaxChapters)
 	}
 	batchSize := 1
 	if chapterCount < batchSize {
@@ -754,7 +772,7 @@ func GenerateNovelChapterHandler(c *gin.Context) {
 		AfterState NovelChapterState `json:"after_state"`
 		NewHooks   []string          `json:"new_hooks"`
 	}
-	if err := callNovelAIJSONContext(taskCtx, system, user, &generated); err != nil {
+	if err := callNovelAIJSONWithTimeoutContext(taskCtx, system, user, &generated, novelChapterMaxTokens(targetWords), 240*time.Second); err != nil {
 		if isContextCanceledError(err) {
 			c.JSON(http.StatusConflict, gin.H{"error": "正文生成任务已终止"})
 			return
@@ -1096,7 +1114,7 @@ func ReviseNovelByFullReviewHandler(c *gin.Context) {
 		}
 		version := NovelChapterVersion{
 			ID:        "VER-" + uuid.NewString(),
-			Type:      "revision",
+			Type:      "full_review_revision",
 			Content:   revisedChapter.Content,
 			Reason:    firstNonEmpty(revisedChapter.Reason, "根据全文质量核验结果修订"),
 			CreatedAt: now,
@@ -1485,17 +1503,32 @@ func continueNovelOutlineGeneration(ctx context.Context, projectID string) {
 }
 
 func novelChapterTargetWords(project NovelProject) int {
+	maxChapterWords := loadNovelWriterGeneralSettings().MaxChapterWords
 	if project.TargetWords > 0 && project.TargetChapters > 0 {
 		average := project.TargetWords / project.TargetChapters
 		if average < 1200 {
 			return 1200
 		}
-		if average > 5000 {
-			return 5000
+		if average > maxChapterWords {
+			return maxChapterWords
 		}
 		return average
 	}
 	return 3000
+}
+
+func novelChapterMaxTokens(targetWords int) int {
+	if targetWords <= 0 {
+		return 9000
+	}
+	maxTokens := targetWords * 2
+	if maxTokens < 9000 {
+		return 9000
+	}
+	if maxTokens > 120000 {
+		return 120000
+	}
+	return maxTokens
 }
 
 func previousNovelChapterContext(project NovelProject, outlineID string, limit int) string {
